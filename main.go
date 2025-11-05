@@ -12,10 +12,39 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+type KubernetesRole int
+
+const (
+	Master KubernetesRole = iota
+	Node
+)
+
+func (r *KubernetesRole) FromString(s string) {
+	switch s {
+	case "node":
+		*r = Node
+	case "master":
+	default:
+		*r = Master
+	}
+}
+
+func (r KubernetesRole) String() string {
+	switch r {
+	case Master:
+		return "master"
+	case Node:
+		return "node"
+	default:
+		return "unknown"
+	}
+}
+
 type Host struct {
 	Name        string
 	System      string
 	AdvertiseIP string
+	Role        KubernetesRole
 }
 
 func GetHosts() ([]Host, error) {
@@ -56,10 +85,19 @@ func GetHosts() ([]Host, error) {
 			return nil, fmt.Errorf("Failed to get advertiseIP from host: %w", err)
 		}
 
+		cmd = exec.Command("nix", "eval", "--raw", fmt.Sprintf(".#nixosConfigurations.%s.config.capybara.app.server.kubernetes.role", hostName))
+		out, err = cmd.Output()
+		if err != nil {
+			return nil, fmt.Errorf("Failed to get kubernetes role from host: %w", err)
+		}
+		var role KubernetesRole
+		role.FromString(strings.TrimSpace(string(out)))
+
 		hosts = append(hosts, Host{
 			Name:        hostName,
 			System:      system,
 			AdvertiseIP: advertiseIP,
+			Role:        role,
 		})
 	}
 
