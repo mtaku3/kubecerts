@@ -1,6 +1,9 @@
 {
-  "$schema":  "https://raw.githubusercontent.com/jetify-com/devbox/0.15.0/.schema/devbox.schema.json",
-  "packages": ["go@1.25.2"],
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.15.0/.schema/devbox.schema.json",
+  "packages": [
+    "go@1.25.2",
+    "gopls@latest"
+  ],
   "shell": {
     "init_hook": [
       "echo 'Welcome to devbox!' > /dev/null"
