@@ -2,7 +2,10 @@ package manager
 
 import (
 	"context"
+	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -96,6 +99,14 @@ func (m *Manager) GetCertificateStatus(ctx context.Context) (*StatusResult, erro
 		}
 	}
 
+	// Check for certificate consistency issues
+	result.Summary.ConsistencyIssues = detectConsistencyIssues(result.HostResults)
+	
+	// If consistency issues found, ensure overall health reflects this
+	if len(result.Summary.ConsistencyIssues) > 0 && result.OverallHealth == HealthOK {
+		result.OverallHealth = HealthWarning
+	}
+
 	return result, nil
 }
 
@@ -154,76 +165,119 @@ func (m *Manager) getHostStatus(ctx context.Context, host types.Host) (*HostStat
 		}
 
 		result.Certificates = append(result.Certificates, CertificateStatusResult{
-			CAType:     caType,
-			Status:     status,
-			ValidFrom:  cert.NotBefore,
-			ValidUntil: cert.NotAfter,
-			CSRValid:   csrValid,
-			CSRError:   csrError,
+			CAType:      caType,
+			Status:      status,
+			ValidFrom:   cert.NotBefore,
+			ValidUntil:  cert.NotAfter,
+			CSRValid:    csrValid,
+			CSRError:    csrError,
+			Fingerprint: computeCertificateFingerprint(certData),
 		})
 	}
 
 	return result, nil
 }
 
-// validateCertificateAgainstCSR validates a certificate against its CSR
-// Returns (valid, error_message) where valid is nil if CSR not found
-// validateCertificateAgainstCSR validates a certificate against an expected CSR
-// generated from the host information and CA type
+// validateCertificateAgainstCSR validates a certificate against its corresponding CSR if available
+// validateCertificateAgainstCSR validates a certificate against its expected CSR
 func (m *Manager) validateCertificateAgainstCSR(host types.Host, caType ca.CAType, cert *x509.Certificate) (*bool, string) {
-	// Get full host information including AdvertiseIP and Role
-	fullHosts, err := m.nixParser.DiscoverFullHosts(context.Background())
+	// For CA certificates, generate the expected CSR on-the-fly
+	expectedCSR, err := m.caGenerator.GenerateCAExpectedCSR(caType)
 	if err != nil {
-		return nil, fmt.Sprintf("Failed to get full host info: %v", err)
+		boolFalse := false
+		return &boolFalse, fmt.Sprintf("failed to generate expected CSR: %v", err)
 	}
 	
-	// Find the matching full host
-	var fullHost *nix.FlakeHost
-	for _, fh := range fullHosts {
-		if fh.Name == host.Name && fh.System == host.System {
-			fullHost = &fh
-			break
+	// Validate the certificate against the expected CSR
+	err = ca.ValidateCertificateAgainstExpectedCSR(cert, expectedCSR)
+	if err != nil {
+		boolFalse := false
+		return &boolFalse, fmt.Sprintf("validation failed: %v", err)
+	}
+	
+	boolTrue := true
+	return &boolTrue, ""
+}
+
+
+
+func (m *Manager) getCertificatePath(host types.Host, caType ca.CAType) string {
+	var fileName string
+	switch caType {
+	case ca.CATypeKubernetes:
+		fileName = "ca.crt.age"
+	case ca.CATypeETCD:
+		fileName = "etcd/ca.crt.age"
+	case ca.CATypeFrontProxy:
+		fileName = "front-proxy-ca.crt.age"
+	}
+	
+	return fmt.Sprintf("%s/%s/%s/kubernetes/pki/%s", 
+		m.config.SecretsDir, host.System, host.Name, fileName)
+}
+
+// computeCertificateFingerprint computes SHA256 fingerprint of certificate data for consistency checking
+func computeCertificateFingerprint(certData []byte) string {
+	hash := sha256.Sum256(certData)
+	return hex.EncodeToString(hash[:])
+}
+
+// detectConsistencyIssues analyzes certificate fingerprints across hosts to find inconsistencies
+func detectConsistencyIssues(hostResults []HostStatusResult) []ConsistencyIssue {
+	var issues []ConsistencyIssue
+	
+	// Group certificates by CA type
+	certsByType := make(map[ca.CAType]map[string][]string) // CA Type -> Fingerprint -> Host names
+	
+	for _, hostResult := range hostResults {
+		for _, cert := range hostResult.Certificates {
+			// Only consider certificates that were successfully loaded (have fingerprints)
+			if cert.Fingerprint == "" || cert.Status == HealthCritical {
+				continue
+			}
+			
+			if certsByType[cert.CAType] == nil {
+				certsByType[cert.CAType] = make(map[string][]string)
+			}
+			
+			certsByType[cert.CAType][cert.Fingerprint] = append(
+				certsByType[cert.CAType][cert.Fingerprint], 
+				hostResult.Host.Name,
+			)
 		}
 	}
 	
-	if fullHost == nil {
-		return nil, "Host not found in flake discovery"
+	// Check for inconsistencies (multiple fingerprints for same CA type)
+	for caType, fingerprints := range certsByType {
+		if len(fingerprints) > 1 {
+			// Multiple different certificates exist for this CA type
+			var hostGroups []string
+			for fingerprint, hosts := range fingerprints {
+				hostGroups = append(hostGroups, fmt.Sprintf("%s (hosts: %s)", 
+					fingerprint[:16]+"...", strings.Join(hosts, ", ")))
+			}
+			
+			issues = append(issues, ConsistencyIssue{
+				CAType:      caType,
+				Description: fmt.Sprintf("Different certificates found across hosts: %s", strings.Join(hostGroups, "; ")),
+				Hosts:       getAllHostsForCAType(fingerprints),
+			})
+		}
 	}
 	
-	// Convert to ca.HostInfo
-	hostInfo := ca.HostInfo{
-		Name:        fullHost.Name,
-		System:      fullHost.System,
-		AdvertiseIP: fullHost.AdvertiseIP,
-		Role:        fullHost.Role.String(),
-	}
-	
-	// Generate expected CSR
-	expectedCSR, err := m.caGenerator.GenerateExpectedCSR(caType, hostInfo)
-	if err != nil {
-		valid := false
-		return &valid, fmt.Sprintf("Failed to generate expected CSR: %v", err)
-	}
-	
-	// Validate certificate against expected CSR
-	err = ca.ValidateCertificateAgainstExpectedCSR(cert, expectedCSR)
-	if err != nil {
-		valid := false
-		return &valid, fmt.Sprintf("Certificate validation failed: %v", err)
-	}
-	
-	valid := true
-	return &valid, ""
+	return issues
 }
 
-// getCSRPath returns the path to the CSR file for a given host and CA type
-// getCSRPath is deprecated - we now generate expected CSRs from host info
-// This method is kept for backward compatibility but should not be used
-func (m *Manager) getCSRPath(host types.Host, caType ca.CAType) string {
-	// This method is no longer used as we generate expected CSRs dynamically
-	return ""
+// getAllHostsForCAType extracts all host names from fingerprint groups
+func getAllHostsForCAType(fingerprints map[string][]string) []string {
+	var allHosts []string
+	for _, hosts := range fingerprints {
+		allHosts = append(allHosts, hosts...)
+	}
+	return allHosts
 }
 
+// RenewCertificates generates new CA certificates and deploys them to all hosts
 func (m *Manager) RenewCertificates(ctx context.Context, caTypes []ca.CAType) (*RenewResult, error) {
 	// Get full host information including AdvertiseIP and Role
 	fullHosts, err := m.nixParser.DiscoverFullHosts(ctx)
@@ -242,64 +296,51 @@ func (m *Manager) RenewCertificates(ctx context.Context, caTypes []ca.CAType) (*
 
 	result := &RenewResult{
 		Success:    true,
-		Operations: make([]RenewalExecution, 0, len(caTypes)*len(fullHosts)),
+		Operations: make([]RenewalExecution, 0, len(caTypes)),
 		Summary: RenewalResultSummary{
 			UpdatedHosts: hosts,
 		},
 	}
 
-	// Generate new certificates for each host and CA type
-	for _, fullHost := range fullHosts {
-		// Convert to ca.HostInfo
-		hostInfo := ca.HostInfo{
-			Name:        fullHost.Name,
-			System:      fullHost.System,
-			AdvertiseIP: fullHost.AdvertiseIP,
-			Role:        fullHost.Role.String(),
+	// Generate certificates once per CA type (not per host)
+	// CA certificates should be identical across all hosts in a cluster
+	generatedCAs := make(map[ca.CAType]struct {
+		cert *x509.Certificate
+		key  *rsa.PrivateKey
+	})
+
+	for _, caType := range caTypes {
+		// Generate CA certificate once (shared across all hosts)
+		cert, key, err := m.caGenerator.GenerateSharedCA(caType)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate CA %s: %w", caType, err)
 		}
 
-		// Convert to types.Host
-		host := types.Host{
-			Name:   fullHost.Name,
-			System: fullHost.System,
-		}
+		generatedCAs[caType] = struct {
+			cert *x509.Certificate
+			key  *rsa.PrivateKey
+		}{cert: cert, key: key}
 
+		operation := RenewalExecution{
+			CAType:     caType,
+			ValidFrom:  cert.NotBefore,
+			ValidUntil: cert.NotAfter,
+		}
+		result.Operations = append(result.Operations, operation)
+	}
+
+	// Deploy the same CA certificates to all hosts
+	for _, host := range hosts {
 		for _, caType := range caTypes {
-			// Generate certificate using expected CSR logic
-			cert, key, err := m.caGenerator.GenerateCA(caType, hostInfo)
-			if err != nil {
-				return nil, fmt.Errorf("failed to generate CA %s for host %s: %w", caType, host.Name, err)
-			}
-
-			operation := RenewalExecution{
-				CAType:     caType,
-				ValidFrom:  cert.NotBefore,
-				ValidUntil: cert.NotAfter,
-			}
-			result.Operations = append(result.Operations, operation)
-
-			// Deploy to this specific host
-			if err := m.syncer.DeployCertificate(ctx, host, caType, cert, key); err != nil {
+			caData := generatedCAs[caType]
+			
+			// Deploy the shared CA certificate to this host
+			if err := m.syncer.DeployCertificate(ctx, host, caType, caData.cert, caData.key); err != nil {
 				return nil, fmt.Errorf("failed to deploy %s to host %s: %w", caType, host.Name, err)
 			}
 		}
 	}
 
-	result.Summary.CertificatesRenewed = len(caTypes) * len(fullHosts)
+	result.Summary.CertificatesRenewed = len(caTypes) * len(hosts)
 	return result, nil
-}
-
-func (m *Manager) getCertificatePath(host types.Host, caType ca.CAType) string {
-	var fileName string
-	switch caType {
-	case ca.CATypeKubernetes:
-		fileName = "ca.crt.age"
-	case ca.CATypeETCD:
-		fileName = "etcd/ca.crt.age"
-	case ca.CATypeFrontProxy:
-		fileName = "front-proxy-ca.crt.age"
-	}
-	
-	return fmt.Sprintf("%s/%s/%s/kubernetes/pki/%s", 
-		m.config.SecretsDir, host.System, host.Name, fileName)
 }

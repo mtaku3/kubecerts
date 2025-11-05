@@ -64,6 +64,76 @@ func (g *Generator) GenerateCA(caType CAType, hostInfo HostInfo) (*x509.Certific
 	return cert, privateKey, nil
 }
 
+// GenerateSharedCA generates a CA certificate that is shared across all hosts in the cluster
+func (g *Generator) GenerateSharedCA(caType CAType) (*x509.Certificate, *rsa.PrivateKey, error) {
+	// Generate private key
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate private key: %w", err)
+	}
+
+	// Get the expected CSR to use as template for subject
+	expectedCSR, err := g.GenerateCAExpectedCSR(caType)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to generate expected CSR: %w", err)
+	}
+
+	// Create certificate template for CA using the expected CSR subject
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               expectedCSR.Subject,
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().AddDate(10, 0, 0), // 10 years for CA
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	// Create certificate
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create certificate: %w", err)
+	}
+
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse created certificate: %w", err)
+	}
+
+	return cert, privateKey, nil
+}
+
+// GenerateCAExpectedCSR generates the expected CSR for CA certificates
+// This is used for both CA generation and validation to ensure consistency
+func (g *Generator) GenerateCAExpectedCSR(caType CAType) (*x509.CertificateRequest, error) {
+	// Create CSR template for CA certificates
+	template := &x509.CertificateRequest{
+		Subject: pkix.Name{
+			Organization:  []string{"Kubernetes"},
+			Country:       []string{"US"},
+			Province:      []string{""},
+			Locality:      []string{""},
+			StreetAddress: []string{""},
+			PostalCode:    []string{""},
+		},
+	}
+
+	// Set common name based on CA type
+	switch caType {
+	case CATypeKubernetes:
+		template.Subject.CommonName = "kubernetes-ca"
+	case CATypeETCD:
+		template.Subject.CommonName = "etcd-ca"
+	case CATypeFrontProxy:
+		template.Subject.CommonName = "kubernetes-front-proxy-ca"
+	default:
+		return nil, fmt.Errorf("unknown CA type: %s", caType)
+	}
+
+	return template, nil
+}
+
+
+
 // GenerateExpectedCSR creates the expected CSR for a given CA type and host
 // This represents what the CSR should look like for proper certificate validation
 func (g *Generator) GenerateExpectedCSR(caType CAType, hostInfo HostInfo) (*x509.CertificateRequest, error) {

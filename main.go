@@ -271,8 +271,19 @@ func printTextStatus(result *manager.StatusResult) error {
 	if result.Summary.WarningCount > 0 {
 		fmt.Printf("  - %d warning(s)\n", result.Summary.WarningCount)
 	}
-	if result.Summary.ExpiredCount == 0 && result.Summary.NotFoundCount == 0 && result.Summary.WarningCount == 0 {
+	if len(result.Summary.ConsistencyIssues) > 0 {
+		fmt.Printf("  - %d consistency issue(s)\n", len(result.Summary.ConsistencyIssues))
+	}
+	if result.Summary.ExpiredCount == 0 && result.Summary.NotFoundCount == 0 && result.Summary.WarningCount == 0 && len(result.Summary.ConsistencyIssues) == 0 {
 		fmt.Println("  - All certificates OK")
+	}
+
+	// Print detailed consistency issues if present
+	if len(result.Summary.ConsistencyIssues) > 0 {
+		fmt.Printf("\nConsistency Issues:\n")
+		for _, issue := range result.Summary.ConsistencyIssues {
+			fmt.Printf("  - %s: %s\n", issue.CAType, issue.Description)
+		}
 	}
 
 	return nil

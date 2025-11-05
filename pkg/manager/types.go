@@ -36,12 +36,21 @@ type CertificateStatusResult struct {
 	Error       string       `json:"error,omitempty"`
 	CSRValid    *bool        `json:"csr_valid,omitempty"`    // nil if CSR not found, true/false if validated
 	CSRError    string       `json:"csr_error,omitempty"`    // CSR validation error details
+	Fingerprint string       `json:"fingerprint,omitempty"`  // SHA256 fingerprint for consistency checking
 }
 
 type StatusSummary struct {
-	ExpiredCount     int `json:"expired_count"`
-	NotFoundCount    int `json:"not_found_count"`
-	WarningCount     int `json:"warning_count"`
+	ExpiredCount     int                     `json:"expired_count"`
+	NotFoundCount    int                     `json:"not_found_count"`
+	WarningCount     int                     `json:"warning_count"`
+	ConsistencyIssues []ConsistencyIssue     `json:"consistency_issues,omitempty"`
+}
+
+// ConsistencyIssue represents a certificate consistency problem across hosts
+type ConsistencyIssue struct {
+	CAType      ca.CAType `json:"ca_type"`
+	Description string    `json:"description"`
+	Hosts       []string  `json:"hosts"`
 }
 
 type RenewResult struct {
