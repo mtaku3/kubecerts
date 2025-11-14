@@ -546,31 +546,21 @@ func (cm *CertManager) displayDiagnostics(diagnostics []DiagnosticInfo) {
 		return
 	}
 
-	fmt.Printf("\n" + strings.Repeat("=", 60) + "\n")
-	fmt.Printf("DIAGNOSTIC INFORMATION\n")
-	fmt.Printf(strings.Repeat("=", 60) + "\n\n")
+	fmt.Printf("\n")
 
 	for _, diag := range diagnostics {
 		if len(diag.Errors) == 0 && len(diag.Warnings) == 0 {
 			continue
 		}
 
-		fmt.Printf("Certificate: %s on %s\n", diag.CertificateFile, diag.Host)
-		
-		if len(diag.Errors) > 0 {
-			fmt.Printf("  \033[31mERRORS:\033[0m\n")
-			for _, err := range diag.Errors {
-				fmt.Printf("    - %s\n", err)
-			}
+		// Display errors on single lines
+		for _, err := range diag.Errors {
+			fmt.Printf("%s on %s - \033[31mERROR:\033[0m %s\n", diag.CertificateFile, diag.Host, err)
 		}
 		
-		if len(diag.Warnings) > 0 {
-			fmt.Printf("  \033[33mWARNINGS:\033[0m\n")
-			for _, warning := range diag.Warnings {
-				fmt.Printf("    - %s\n", warning)
-			}
+		// Display warnings on single lines
+		for _, warning := range diag.Warnings {
+			fmt.Printf("%s on %s - \033[33mWARNING:\033[0m %s\n", diag.CertificateFile, diag.Host, warning)
 		}
-		
-		fmt.Println()
 	}
 }
