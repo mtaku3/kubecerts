@@ -155,6 +155,17 @@ func (cm *CertManager) getCertificatesForHost(h host.Host, now time.Time) []Cert
 	for _, certFile := range certFiles {
 		if certInfo := cm.getCertificateInfo(h, certFile, now); certInfo != nil {
 			certs = append(certs, *certInfo)
+		} else {
+			// Add missing certificate entry
+			certs = append(certs, CertificateInfo{
+				Host:            h.Name,
+				Role:            h.Role.String(),
+				CertificateFile: certFile,
+				Subject:         "N/A",
+				Issuer:          "N/A",
+				DaysLeft:        0,
+				Status:          "MISSING",
+			})
 		}
 	}
 
@@ -370,6 +381,8 @@ func (cm *CertManager) displayConciseCertificates(certs []CertificateInfo) {
 			statusColor = "\033[33m" // Yellow
 		case "RENEWAL_SOON":
 			statusColor = "\033[33m" // Yellow
+		case "MISSING":
+			statusColor = "\033[31m" // Red
 		default:
 			statusColor = "\033[32m" // Green
 		}
@@ -390,6 +403,7 @@ func (cm *CertManager) displayConciseCertificates(certs []CertificateInfo) {
 	// Summary
 	expired := 0
 	warning := 0
+	missing := 0
 	ok := 0
 	for _, cert := range certs {
 		switch cert.Status {
@@ -397,12 +411,14 @@ func (cm *CertManager) displayConciseCertificates(certs []CertificateInfo) {
 			expired++
 		case "WARNING", "RENEWAL_SOON":
 			warning++
+		case "MISSING":
+			missing++
 		default:
 			ok++
 		}
 	}
 
-	fmt.Printf("\nSummary: %d OK, %d WARNING, %d EXPIRED\n", ok, warning, expired)
+	fmt.Printf("\nSummary: %d OK, %d WARNING, %d EXPIRED, %d MISSING\n", ok, warning, expired, missing)
 }
 
 func (cm *CertManager) displayVerboseCertificates(certs []CertificateInfo) {
@@ -420,6 +436,8 @@ func (cm *CertManager) displayVerboseCertificates(certs []CertificateInfo) {
 			statusColor = "\033[31m"
 		case "WARNING", "RENEWAL_SOON":
 			statusColor = "\033[33m"
+		case "MISSING":
+			statusColor = "\033[31m"
 		default:
 			statusColor = "\033[32m"
 		}
