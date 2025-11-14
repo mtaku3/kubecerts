@@ -140,3 +140,21 @@ func NewKubeletClientConfig(nodeName string) *CertConfig {
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 }
+
+func NewControllerManagerClientConfig() *CertConfig {
+	return &CertConfig{
+		CommonName:   "system:kube-controller-manager",
+		ValidityDays: CertValidityDays,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+}
+
+func NewSchedulerClientConfig() *CertConfig {
+	return &CertConfig{
+		CommonName:   "system:kube-scheduler",
+		ValidityDays: CertValidityDays,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+}

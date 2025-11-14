@@ -55,7 +55,7 @@ func NewCertsCommand() *cobra.Command {
 	cmd.AddCommand(newCertsAPIServerCommand())
 	cmd.AddCommand(newCertsEtcdCommand())
 	cmd.AddCommand(newCertsSACommand())
-	cmd.AddCommand(newCertsKubeletCommand())
+	cmd.AddCommand(newCertsClientCommand())
 
 	return cmd
 }
@@ -89,8 +89,8 @@ func newCertsAllCommand() *cobra.Command {
 				return fmt.Errorf("failed to generate etcd certificates: %w", err)
 			}
 			
-			if err := cm.GenerateKubeletCertificates(); err != nil {
-				return fmt.Errorf("failed to generate kubelet certificates: %w", err)
+			if err := cm.GenerateClientCertificates(); err != nil {
+				return fmt.Errorf("failed to generate client certificates: %w", err)
 			}
 
 			logrus.Info("All certificates generated successfully")
@@ -167,19 +167,19 @@ func newCertsSACommand() *cobra.Command {
 	}
 }
 
-func newCertsKubeletCommand() *cobra.Command {
+func newCertsClientCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:   "kubelet",
-		Short: "Generate kubelet client certificates",
-		Long:  "Generate kubelet client certificates for all nodes",
+		Use:   "client",
+		Short: "Generate client certificates",
+		Long:  "Generate kubelet, controller-manager, and scheduler client certificates",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cm, err := NewCertManager()
 			if err != nil {
 				return err
 			}
 
-			logrus.Info("Generating kubelet certificates...")
-			return cm.GenerateKubeletCertificates()
+			logrus.Info("Generating client certificates...")
+			return cm.GenerateClientCertificates()
 		},
 	}
 }
@@ -445,30 +445,32 @@ func (cm *CertManager) GenerateEtcdCertificates() error {
 	return nil
 }
 
-// GenerateKubeletCertificates generates kubelet client certificates for all nodes
-func (cm *CertManager) GenerateKubeletCertificates() error {
-	for _, h := range cm.hosts {
-		// Load CA certificate and key from any master node
-		var caCertPEM, caKeyPEM []byte
-		var err error
+// GenerateClientCertificates generates kubelet, controller-manager, and scheduler client certificates
+func (cm *CertManager) GenerateClientCertificates() error {
+	// Group hosts by system to avoid loading CA multiple times
+	systemCAs := make(map[string]struct {
+		cert *cert.CertificateBundle
+		ca   *cert.CertificateBundle
+	})
 
-		// Find a master node to get CA from
-		for _, master := range cm.hosts {
-			if master.Role == host.Master && master.System == h.System {
-				caCertPEM, err = cm.storage.LoadCertificate(master, "ca.crt")
-				if err != nil {
-					continue
-				}
-				caKeyPEM, err = cm.storage.LoadPrivateKey(master, "ca.key")
-				if err != nil {
-					continue
-				}
-				break
-			}
+	// Load CA certificates for each system
+	for _, h := range cm.hosts {
+		if h.Role != host.Master {
+			continue
+		}
+		
+		if _, exists := systemCAs[h.System]; exists {
+			continue
 		}
 
-		if caCertPEM == nil {
-			return fmt.Errorf("failed to find CA certificate for system %s", h.System)
+		// Load CA certificate and key
+		caCertPEM, err := cm.storage.LoadCertificate(h, "ca.crt")
+		if err != nil {
+			return fmt.Errorf("failed to load CA certificate for host %s: %w", h.Name, err)
+		}
+		caKeyPEM, err := cm.storage.LoadPrivateKey(h, "ca.key")
+		if err != nil {
+			return fmt.Errorf("failed to load CA key for host %s: %w", h.Name, err)
 		}
 
 		caCert, err := cert.ParseCertificateFromPEM(caCertPEM)
@@ -480,21 +482,63 @@ func (cm *CertManager) GenerateKubeletCertificates() error {
 			return fmt.Errorf("failed to parse CA key: %w", err)
 		}
 
-		// Generate kubelet client certificate
-		kubeletCert, err := cert.GenerateCertificate(cert.NewKubeletClientConfig(h.Name), caCert, caKey)
-		if err != nil {
-			return fmt.Errorf("failed to generate kubelet certificate for %s: %w", h.Name, err)
+		systemCAs[h.System] = struct {
+			cert *cert.CertificateBundle
+			ca   *cert.CertificateBundle
+		}{
+			ca: &cert.CertificateBundle{
+				Certificate: caCert,
+				PrivateKey:  caKey,
+			},
+		}
+	}
+
+	// Generate certificates for all hosts
+	for _, h := range cm.hosts {
+		systemCA, exists := systemCAs[h.System]
+		if !exists {
+			return fmt.Errorf("failed to find CA certificate for system %s", h.System)
 		}
 
-		// Save certificate
-		if err := cm.storage.SaveCertificate(h, "kubelet-client.crt", kubeletCert.CertPEM); err != nil {
-			return fmt.Errorf("failed to save kubelet certificate: %w", err)
-		}
-		if err := cm.storage.SavePrivateKey(h, "kubelet-client.key", kubeletCert.KeyPEM); err != nil {
-			return fmt.Errorf("failed to save kubelet key: %w", err)
+		// Client certificates to generate
+		clientCerts := []struct {
+			name   string
+			config *cert.CertConfig
+		}{
+			{"kubelet-client", cert.NewKubeletClientConfig(h.Name)},
 		}
 
-		logrus.Infof("Generated kubelet certificate for host %s", h.Name)
+		// Add master-specific certificates
+		if h.Role == host.Master {
+			clientCerts = append(clientCerts, []struct {
+				name   string
+				config *cert.CertConfig
+			}{
+				{"controller-manager-client", cert.NewControllerManagerClientConfig()},
+				{"scheduler-client", cert.NewSchedulerClientConfig()},
+			}...)
+		}
+
+		// Generate and save each certificate
+		for _, clientCert := range clientCerts {
+			generatedCert, err := cert.GenerateCertificate(clientCert.config, systemCA.ca.Certificate, systemCA.ca.PrivateKey)
+			if err != nil {
+				return fmt.Errorf("failed to generate %s certificate for %s: %w", clientCert.name, h.Name, err)
+			}
+
+			if err := cm.storage.SaveCertificate(h, clientCert.name+".crt", generatedCert.CertPEM); err != nil {
+				return fmt.Errorf("failed to save %s certificate: %w", clientCert.name, err)
+			}
+			if err := cm.storage.SavePrivateKey(h, clientCert.name+".key", generatedCert.KeyPEM); err != nil {
+				return fmt.Errorf("failed to save %s key: %w", clientCert.name, err)
+			}
+		}
+
+		if h.Role == host.Master {
+			logrus.Infof("Generated kubelet, controller-manager, and scheduler certificates for host %s", h.Name)
+		} else {
+			logrus.Infof("Generated kubelet certificate for host %s", h.Name)
+		}
 	}
 
 	return nil

@@ -77,9 +77,13 @@ func getCertificatePriority(certFile string) int {
 		default:
 			return 9
 		}
-	// Kubelet certificates (priority 4)
+	// Client certificates (priority 4)
 	case certFile == "kubelet-client.crt":
 		return 10
+	case certFile == "controller-manager-client.crt":
+		return 11
+	case certFile == "scheduler-client.crt":
+		return 12
 	// Everything else
 	default:
 		return 99
@@ -143,6 +147,8 @@ func (cm *CertManager) getCertificatesForHost(h host.Host, now time.Time) []Cert
 			"etcd/server.crt",
 			"etcd/peer.crt",
 			"etcd/healthcheck-client.crt",
+			"controller-manager-client.crt",
+			"scheduler-client.crt",
 		)
 	}
 
@@ -282,6 +288,10 @@ func (cm *CertManager) getExpectedConfigForCert(h host.Host, certFile string) *c
 		return cert.NewEtcdHealthcheckClientConfig()
 	case "kubelet-client.crt":
 		return cert.NewKubeletClientConfig(h.Name)
+	case "controller-manager-client.crt":
+		return cert.NewControllerManagerClientConfig()
+	case "scheduler-client.crt":
+		return cert.NewSchedulerClientConfig()
 	default:
 		return nil
 	}
@@ -290,7 +300,7 @@ func (cm *CertManager) getExpectedConfigForCert(h host.Host, certFile string) *c
 // getCAFileForCert returns the CA file for a given certificate
 func (cm *CertManager) getCAFileForCert(certFile string) string {
 	switch certFile {
-	case "apiserver.crt", "apiserver-kubelet-client.crt", "apiserver-etcd-client.crt", "kubelet-client.crt":
+	case "apiserver.crt", "apiserver-kubelet-client.crt", "apiserver-etcd-client.crt", "kubelet-client.crt", "controller-manager-client.crt", "scheduler-client.crt":
 		return "ca.crt"
 	case "front-proxy-client.crt":
 		return "front-proxy-ca.crt"

@@ -69,6 +69,8 @@ func (cm *CertManager) CheckCertificates() error {
 				"etcd/server.crt",
 				"etcd/peer.crt",
 				"etcd/healthcheck-client.crt",
+				"controller-manager-client.crt",
+				"scheduler-client.crt",
 			}
 
 			for _, certFile := range certificates {
@@ -210,6 +212,8 @@ func (cm *CertManager) validateServiceCertificates(h host.Host) bool {
 		{"etcd/server.crt", cert.NewEtcdServerConfig(h.Name, h.AdvertiseIP), "etcd/ca.crt"},
 		{"etcd/peer.crt", cert.NewEtcdPeerConfig(h.Name, h.AdvertiseIP), "etcd/ca.crt"},
 		{"etcd/healthcheck-client.crt", cert.NewEtcdHealthcheckClientConfig(), "etcd/ca.crt"},
+		{"controller-manager-client.crt", cert.NewControllerManagerClientConfig(), "ca.crt"},
+		{"scheduler-client.crt", cert.NewSchedulerClientConfig(), "ca.crt"},
 	}
 	
 	allValid := true
