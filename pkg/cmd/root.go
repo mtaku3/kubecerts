@@ -17,9 +17,8 @@ certificate storage and distribution.`,
 
 	// Add subcommands
 	cmd.AddCommand(NewCertsCommand())
-	cmd.AddCommand(NewCheckCommand())
 	cmd.AddCommand(NewRenewCommand())
-	cmd.AddCommand(NewListCommand())
+	cmd.AddCommand(NewStatusCommand())
 
 	return cmd
 }

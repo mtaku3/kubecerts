@@ -26,21 +26,29 @@ type CertificateInfo struct {
 	Status       string
 }
 
-// NewListCommand creates the list command
-func NewListCommand() *cobra.Command {
+// DiagnosticInfo holds diagnostic information about certificate validation
+type DiagnosticInfo struct {
+	Host         string
+	CertificateFile string
+	Errors       []string
+	Warnings     []string
+}
+
+// NewStatusCommand creates the status command
+func NewStatusCommand() *cobra.Command {
 	var verbose bool
 
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List all certificates with expiry information",
-		Long:  "List all certificates in the cluster with their expiry dates and status",
+		Use:   "status",
+		Short: "Show certificate status with detailed diagnostics",
+		Long:  "Show all certificates in the cluster with their status, expiry dates, and detailed validation diagnostics",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cm, err := NewCertManager()
 			if err != nil {
 				return err
 			}
 
-			return cm.ListCertificates(verbose)
+			return cm.ShowCertificateStatus(verbose)
 		},
 	}
 
@@ -90,15 +98,17 @@ func getCertificatePriority(certFile string) int {
 	}
 }
 
-// ListCertificates lists all certificates with their status
-func (cm *CertManager) ListCertificates(verbose bool) error {
+// ShowCertificateStatus shows all certificates with their status and diagnostics
+func (cm *CertManager) ShowCertificateStatus(verbose bool) error {
 	var allCerts []CertificateInfo
+	var allDiagnostics []DiagnosticInfo
 	now := time.Now()
 
 	for _, h := range cm.hosts {
 		// Get certificates for this host
-		certs := cm.getCertificatesForHost(h, now)
+		certs, diagnostics := cm.getCertificatesAndDiagnosticsForHost(h, now)
 		allCerts = append(allCerts, certs...)
+		allDiagnostics = append(allDiagnostics, diagnostics...)
 	}
 
 	// Sort by host first, then by certificate type for better readability
@@ -126,11 +136,15 @@ func (cm *CertManager) ListCertificates(verbose bool) error {
 		cm.displayConciseCertificates(allCerts)
 	}
 
+	// Display diagnostic information
+	cm.displayDiagnostics(allDiagnostics)
+
 	return nil
 }
 
-func (cm *CertManager) getCertificatesForHost(h host.Host, now time.Time) []CertificateInfo {
+func (cm *CertManager) getCertificatesAndDiagnosticsForHost(h host.Host, now time.Time) ([]CertificateInfo, []DiagnosticInfo) {
 	var certs []CertificateInfo
+	var diagnostics []DiagnosticInfo
 
 	// Certificate files to check based on role
 	certFiles := []string{"kubelet-client.crt"}
@@ -155,6 +169,14 @@ func (cm *CertManager) getCertificatesForHost(h host.Host, now time.Time) []Cert
 	for _, certFile := range certFiles {
 		if certInfo := cm.getCertificateInfo(h, certFile, now); certInfo != nil {
 			certs = append(certs, *certInfo)
+			
+			// Get diagnostic information for existing certificates with issues
+			if certInfo.Status != "OK" {
+				diagInfo := cm.getDiagnosticInfo(h, certFile)
+				if len(diagInfo.Errors) > 0 || len(diagInfo.Warnings) > 0 {
+					diagnostics = append(diagnostics, diagInfo)
+				}
+			}
 		} else {
 			// Add missing certificate entry
 			certs = append(certs, CertificateInfo{
@@ -166,10 +188,18 @@ func (cm *CertManager) getCertificatesForHost(h host.Host, now time.Time) []Cert
 				DaysLeft:        0,
 				Status:          "MISSING",
 			})
+			
+			// Add diagnostic for missing certificate
+			diagnostics = append(diagnostics, DiagnosticInfo{
+				Host:            h.Name,
+				CertificateFile: certFile,
+				Errors:          []string{"Certificate file does not exist"},
+				Warnings:        []string{},
+			})
 		}
 	}
 
-	return certs
+	return certs, diagnostics
 }
 
 func (cm *CertManager) getCertificateInfo(h host.Host, certFile string, now time.Time) *CertificateInfo {
@@ -443,6 +473,104 @@ func (cm *CertManager) displayVerboseCertificates(certs []CertificateInfo) {
 		}
 		
 		fmt.Printf("  Status: %s%s\033[0m\n", statusColor, cert.Status)
+		fmt.Println()
+	}
+}
+
+// getDiagnosticInfo gets detailed diagnostic information for a certificate
+func (cm *CertManager) getDiagnosticInfo(h host.Host, certFile string) DiagnosticInfo {
+	diagInfo := DiagnosticInfo{
+		Host:            h.Name,
+		CertificateFile: certFile,
+		Errors:          []string{},
+		Warnings:        []string{},
+	}
+
+	// Get expected configuration for this certificate type
+	expectedConfig := cm.getExpectedConfigForCert(h, certFile)
+	if expectedConfig == nil {
+		return diagInfo
+	}
+
+	// Load and parse certificate
+	certPEM, err := cm.storage.LoadCertificate(h, certFile)
+	if err != nil {
+		diagInfo.Errors = append(diagInfo.Errors, fmt.Sprintf("Failed to load certificate: %v", err))
+		return diagInfo
+	}
+
+	certificate, err := cert.ParseCertificateFromPEM(certPEM)
+	if err != nil {
+		diagInfo.Errors = append(diagInfo.Errors, fmt.Sprintf("Failed to parse certificate: %v", err))
+		return diagInfo
+	}
+
+	// Load CA certificate for chain validation if needed
+	var caCert *cert.CertificateBundle = nil
+	caFile := cm.getCAFileForCert(certFile)
+	if caFile != "" && cm.storage.CertificateExists(h, caFile) {
+		caCertPEM, err := cm.storage.LoadCertificate(h, caFile)
+		if err == nil {
+			caCertX509, err := cert.ParseCertificateFromPEM(caCertPEM)
+			if err == nil {
+				caCert = &cert.CertificateBundle{Certificate: caCertX509}
+			}
+		}
+	}
+
+	// Perform comprehensive validation
+	result := cert.ValidateCertificateWithConfig(certificate, certFile, expectedConfig)
+	diagInfo.Errors = append(diagInfo.Errors, result.Errors...)
+	diagInfo.Warnings = append(diagInfo.Warnings, result.Warnings...)
+
+	// Perform host-specific validation for service certificates
+	if expectedConfig.DNSNames != nil || expectedConfig.IPAddresses != nil {
+		hostResult := cert.ValidateCertificateForHost(certificate, h, certFile, expectedConfig)
+		diagInfo.Errors = append(diagInfo.Errors, hostResult.Errors...)
+		diagInfo.Warnings = append(diagInfo.Warnings, hostResult.Warnings...)
+	}
+
+	// Perform certificate chain validation if CA is available
+	if caCert != nil && caCert.Certificate != nil {
+		chainResult := cert.ValidateCertificateChain(certificate, caCert.Certificate)
+		diagInfo.Errors = append(diagInfo.Errors, chainResult.Errors...)
+		diagInfo.Warnings = append(diagInfo.Warnings, chainResult.Warnings...)
+	}
+
+	return diagInfo
+}
+
+// displayDiagnostics displays detailed diagnostic information
+func (cm *CertManager) displayDiagnostics(diagnostics []DiagnosticInfo) {
+	if len(diagnostics) == 0 {
+		return
+	}
+
+	fmt.Printf("\n" + strings.Repeat("=", 60) + "\n")
+	fmt.Printf("DIAGNOSTIC INFORMATION\n")
+	fmt.Printf(strings.Repeat("=", 60) + "\n\n")
+
+	for _, diag := range diagnostics {
+		if len(diag.Errors) == 0 && len(diag.Warnings) == 0 {
+			continue
+		}
+
+		fmt.Printf("Certificate: %s on %s\n", diag.CertificateFile, diag.Host)
+		
+		if len(diag.Errors) > 0 {
+			fmt.Printf("  \033[31mERRORS:\033[0m\n")
+			for _, err := range diag.Errors {
+				fmt.Printf("    - %s\n", err)
+			}
+		}
+		
+		if len(diag.Warnings) > 0 {
+			fmt.Printf("  \033[33mWARNINGS:\033[0m\n")
+			for _, warning := range diag.Warnings {
+				fmt.Printf("    - %s\n", warning)
+			}
+		}
+		
 		fmt.Println()
 	}
 }
