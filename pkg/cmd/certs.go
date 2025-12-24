@@ -506,6 +506,7 @@ func (cm *CertManager) GenerateClientCertificates() error {
 			config *cert.CertConfig
 		}{
 			{"kubelet-client", cert.NewKubeletClientConfig(h.Name)},
+			{"flannel-client", cert.NewFlannelClientConfig()},
 		}
 
 		// Add master-specific certificates
@@ -516,6 +517,7 @@ func (cm *CertManager) GenerateClientCertificates() error {
 			}{
 				{"controller-manager-client", cert.NewControllerManagerClientConfig()},
 				{"scheduler-client", cert.NewSchedulerClientConfig()},
+				{"addon-manager-client", cert.NewAddonManagerClientConfig()},
 			}...)
 		}
 

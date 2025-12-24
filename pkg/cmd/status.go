@@ -152,6 +152,9 @@ func (cm *CertManager) getCertificatesAndDiagnosticsForHost(h host.Host, now tim
 	// Add CA certificates (all hosts have these)
 	certFiles = append(certFiles, "ca.crt", "front-proxy-ca.crt", "etcd/ca.crt")
 
+	// Add service account certificates (all hosts have these)
+	certFiles = append(certFiles, "flannel-client.crt")
+
 	if h.Role == host.Master {
 		certFiles = append(certFiles,
 			"apiserver.crt",
@@ -163,6 +166,7 @@ func (cm *CertManager) getCertificatesAndDiagnosticsForHost(h host.Host, now tim
 			"etcd/healthcheck-client.crt",
 			"controller-manager-client.crt",
 			"scheduler-client.crt",
+			"addon-manager-client.crt",
 		)
 	}
 
@@ -333,6 +337,10 @@ func (cm *CertManager) getExpectedConfigForCert(h host.Host, certFile string) *c
 		return cert.NewControllerManagerClientConfig()
 	case "scheduler-client.crt":
 		return cert.NewSchedulerClientConfig()
+	case "addon-manager-client.crt":
+		return cert.NewAddonManagerClientConfig()
+	case "flannel-client.crt":
+		return cert.NewFlannelClientConfig()
 	default:
 		return nil
 	}

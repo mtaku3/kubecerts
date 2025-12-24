@@ -158,3 +158,21 @@ func NewSchedulerClientConfig() *CertConfig {
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 }
+
+func NewAddonManagerClientConfig() *CertConfig {
+	return &CertConfig{
+		CommonName:   "system:kube-addon-manager",
+		ValidityDays: CertValidityDays,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+}
+
+func NewFlannelClientConfig() *CertConfig {
+	return &CertConfig{
+		CommonName:   "flannel-client",
+		ValidityDays: CertValidityDays,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+}
