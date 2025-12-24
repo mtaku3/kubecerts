@@ -176,3 +176,12 @@ func NewFlannelClientConfig() *CertConfig {
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 }
+
+func NewClusterAdminClientConfig() *CertConfig {
+	return &CertConfig{
+		CommonName:   "cluster-admin",
+		ValidityDays: CertValidityDays,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+}

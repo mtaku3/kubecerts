@@ -518,6 +518,7 @@ func (cm *CertManager) GenerateClientCertificates() error {
 				{"controller-manager-client", cert.NewControllerManagerClientConfig()},
 				{"scheduler-client", cert.NewSchedulerClientConfig()},
 				{"addon-manager-client", cert.NewAddonManagerClientConfig()},
+				{"cluster-admin-client", cert.NewClusterAdminClientConfig()},
 			}...)
 		}
 

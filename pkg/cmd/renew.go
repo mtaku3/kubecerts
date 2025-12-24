@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mtaku3/kubecerts/pkg/cert"
@@ -47,7 +48,10 @@ func (cm *CertManager) RenewExpiredCertificates() error {
 	renewed := 0
 	for _, h := range cm.hosts {
 		// Check and renew certificates as needed
-		certificates := []string{"kubelet-client.crt"}
+		certificates := []string{
+			"kubelet-client.crt",
+			"flannel-client.crt",
+		}
 		
 		if h.Role == host.Master {
 			certificates = append(certificates,
@@ -58,6 +62,10 @@ func (cm *CertManager) RenewExpiredCertificates() error {
 				"etcd/server.crt",
 				"etcd/peer.crt",
 				"etcd/healthcheck-client.crt",
+				"controller-manager-client.crt",
+				"scheduler-client.crt",
+				"addon-manager-client.crt",
+				"cluster-admin-client.crt",
 			)
 		}
 
@@ -136,6 +144,18 @@ func (cm *CertManager) renewCertificate(h host.Host, certFile string) error {
 		return cm.regenerateEtcdPeerCert(h)
 	case "etcd/healthcheck-client.crt":
 		return cm.regenerateEtcdHealthcheckCert(h)
+	case "front-proxy-client.crt":
+		return cm.regenerateFrontProxyClientCert(h)
+	case "controller-manager-client.crt":
+		return cm.regenerateControllerManagerClientCert(h)
+	case "scheduler-client.crt":
+		return cm.regenerateSchedulerClientCert(h)
+	case "flannel-client.crt":
+		return cm.regenerateFlannelClientCert(h)
+	case "addon-manager-client.crt":
+		return cm.regenerateAddonManagerClientCert(h)
+	case "cluster-admin-client.crt":
+		return cm.regenerateClusterAdminClientCert(h)
 	default:
 		return fmt.Errorf("unknown certificate type: %s", certFile)
 	}
@@ -252,4 +272,90 @@ func (cm *CertManager) regenerateEtcdPeerCert(h host.Host) error {
 func (cm *CertManager) regenerateEtcdHealthcheckCert(h host.Host) error {
 	logrus.Debugf("Regenerating etcd healthcheck certificate for %s", h.Name)
 	return nil
+}
+
+// regenerateClientCertificate is a generic function to regenerate any client certificate
+func (cm *CertManager) regenerateClientCertificate(h host.Host, certName string, config *cert.CertConfig, caFile string) error {
+	// Load appropriate CA
+	caCertPEM, err := cm.storage.LoadCertificate(h, caFile)
+	if err != nil {
+		return fmt.Errorf("failed to load CA certificate: %w", err)
+	}
+	
+	// For client certificates, we need CA key from a master node
+	var caKeyPEM []byte
+	if h.Role == host.Master {
+		caKeyPEM, err = cm.storage.LoadPrivateKey(h, strings.Replace(caFile, ".crt", ".key", 1))
+		if err != nil {
+			return fmt.Errorf("failed to load CA key: %w", err)
+		}
+	} else {
+		// For non-master nodes, find a master node in the same system to get CA key
+		for _, master := range cm.hosts {
+			if master.Role == host.Master && master.System == h.System {
+				caKeyPEM, err = cm.storage.LoadPrivateKey(master, strings.Replace(caFile, ".crt", ".key", 1))
+				if err == nil {
+					break
+				}
+			}
+		}
+		if caKeyPEM == nil {
+			return fmt.Errorf("failed to find CA key from any master node")
+		}
+	}
+
+	caCert, err := cert.ParseCertificateFromPEM(caCertPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA certificate: %w", err)
+	}
+	caKey, err := cert.ParsePrivateKeyFromPEM(caKeyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA key: %w", err)
+	}
+
+	// Generate new certificate
+	newCert, err := cert.GenerateCertificate(config, caCert, caKey)
+	if err != nil {
+		return fmt.Errorf("failed to generate new certificate: %w", err)
+	}
+
+	// Save new certificate and key
+	if err := cm.storage.SaveCertificate(h, certName+".crt", newCert.CertPEM); err != nil {
+		return fmt.Errorf("failed to save new certificate: %w", err)
+	}
+	if err := cm.storage.SavePrivateKey(h, certName+".key", newCert.KeyPEM); err != nil {
+		return fmt.Errorf("failed to save new key: %w", err)
+	}
+
+	return nil
+}
+
+func (cm *CertManager) regenerateFrontProxyClientCert(h host.Host) error {
+	return cm.regenerateClientCertificate(h, "front-proxy-client", 
+		cert.NewFrontProxyClientConfig(), "front-proxy-ca.crt")
+}
+
+func (cm *CertManager) regenerateControllerManagerClientCert(h host.Host) error {
+	return cm.regenerateClientCertificate(h, "controller-manager-client", 
+		cert.NewControllerManagerClientConfig(), "ca.crt")
+}
+
+func (cm *CertManager) regenerateSchedulerClientCert(h host.Host) error {
+	return cm.regenerateClientCertificate(h, "scheduler-client", 
+		cert.NewSchedulerClientConfig(), "ca.crt")
+}
+
+func (cm *CertManager) regenerateFlannelClientCert(h host.Host) error {
+	return cm.regenerateClientCertificate(h, "flannel-client", 
+		cert.NewFlannelClientConfig(), "ca.crt")
+}
+
+func (cm *CertManager) regenerateAddonManagerClientCert(h host.Host) error {
+	return cm.regenerateClientCertificate(h, "addon-manager-client", 
+		cert.NewAddonManagerClientConfig(), "ca.crt")
+}
+
+func (cm *CertManager) regenerateClusterAdminClientCert(h host.Host) error {
+	return cm.regenerateClientCertificate(h, "cluster-admin-client", 
+		cert.NewClusterAdminClientConfig(), "ca.crt")
 }

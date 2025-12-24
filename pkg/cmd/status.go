@@ -167,6 +167,7 @@ func (cm *CertManager) getCertificatesAndDiagnosticsForHost(h host.Host, now tim
 			"controller-manager-client.crt",
 			"scheduler-client.crt",
 			"addon-manager-client.crt",
+			"cluster-admin-client.crt",
 		)
 	}
 
@@ -341,6 +342,8 @@ func (cm *CertManager) getExpectedConfigForCert(h host.Host, certFile string) *c
 		return cert.NewAddonManagerClientConfig()
 	case "flannel-client.crt":
 		return cert.NewFlannelClientConfig()
+	case "cluster-admin-client.crt":
+		return cert.NewClusterAdminClientConfig()
 	default:
 		return nil
 	}
