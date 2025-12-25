@@ -88,10 +88,12 @@ func getCertificatePriority(certFile string) int {
 	// Client certificates (priority 4)
 	case certFile == "kubelet-client.crt":
 		return 10
-	case certFile == "controller-manager-client.crt":
+	case certFile == "kube-proxy-client.crt":
 		return 11
-	case certFile == "scheduler-client.crt":
+	case certFile == "controller-manager-client.crt":
 		return 12
+	case certFile == "scheduler-client.crt":
+		return 13
 	// Everything else
 	default:
 		return 99
@@ -147,7 +149,7 @@ func (cm *CertManager) getCertificatesAndDiagnosticsForHost(h host.Host, now tim
 	var diagnostics []DiagnosticInfo
 
 	// Certificate files to check based on role
-	certFiles := []string{"kubelet-client.crt"}
+	certFiles := []string{"kubelet-client.crt", "kube-proxy-client.crt"}
 	
 	// Add CA certificates (all hosts have these)
 	certFiles = append(certFiles, "ca.crt", "front-proxy-ca.crt", "etcd/ca.crt")
@@ -334,6 +336,8 @@ func (cm *CertManager) getExpectedConfigForCert(h host.Host, certFile string) *c
 		return cert.NewEtcdHealthcheckClientConfig()
 	case "kubelet-client.crt":
 		return cert.NewKubeletClientConfig(h.Name)
+	case "kube-proxy-client.crt":
+		return cert.NewKubeProxyClientConfig(h.Name)
 	case "controller-manager-client.crt":
 		return cert.NewControllerManagerClientConfig()
 	case "scheduler-client.crt":
@@ -352,8 +356,10 @@ func (cm *CertManager) getExpectedConfigForCert(h host.Host, certFile string) *c
 // getCAFileForCert returns the CA file for a given certificate
 func (cm *CertManager) getCAFileForCert(certFile string) string {
 	switch certFile {
-	case "apiserver.crt", "apiserver-kubelet-client.crt", "apiserver-etcd-client.crt", "kubelet-client.crt", "controller-manager-client.crt", "scheduler-client.crt":
+	case "apiserver.crt", "apiserver-kubelet-client.crt", "kubelet-client.crt", "kube-proxy-client.crt", "controller-manager-client.crt", "scheduler-client.crt":
 		return "ca.crt"
+	case "apiserver-etcd-client.crt":
+		return "etcd/ca.crt"
 	case "front-proxy-client.crt":
 		return "front-proxy-ca.crt"
 	case "etcd/server.crt", "etcd/peer.crt", "etcd/healthcheck-client.crt":

@@ -171,7 +171,7 @@ func newCertsClientCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "client",
 		Short: "Generate client certificates",
-		Long:  "Generate kubelet, controller-manager, and scheduler client certificates",
+		Long:  "Generate kubelet, kube-proxy, controller-manager, and scheduler client certificates",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cm, err := NewCertManager()
 			if err != nil {
@@ -312,8 +312,27 @@ func (cm *CertManager) GenerateAPIServerCertificates() error {
 			return fmt.Errorf("failed to generate API server kubelet client certificate: %w", err)
 		}
 
-		// Generate API server etcd client certificate
-		etcdClientCert, err := cert.GenerateCertificate(cert.NewAPIServerEtcdClientConfig(), caCert, caKey)
+		// Load ETCD CA certificate and key for API server etcd client certificate
+		etcdCACertPEM, err := cm.storage.LoadCertificate(h, "etcd/ca.crt")
+		if err != nil {
+			return fmt.Errorf("failed to load etcd CA certificate for host %s: %w", h.Name, err)
+		}
+		etcdCAKeyPEM, err := cm.storage.LoadPrivateKey(h, "etcd/ca.key")
+		if err != nil {
+			return fmt.Errorf("failed to load etcd CA key for host %s: %w", h.Name, err)
+		}
+
+		etcdCACert, err := cert.ParseCertificateFromPEM(etcdCACertPEM)
+		if err != nil {
+			return fmt.Errorf("failed to parse etcd CA certificate: %w", err)
+		}
+		etcdCAKey, err := cert.ParsePrivateKeyFromPEM(etcdCAKeyPEM)
+		if err != nil {
+			return fmt.Errorf("failed to parse etcd CA key: %w", err)
+		}
+
+		// Generate API server etcd client certificate (signed by ETCD CA)
+		etcdClientCert, err := cert.GenerateCertificate(cert.NewAPIServerEtcdClientConfig(), etcdCACert, etcdCAKey)
 		if err != nil {
 			return fmt.Errorf("failed to generate API server etcd client certificate: %w", err)
 		}
@@ -506,6 +525,7 @@ func (cm *CertManager) GenerateClientCertificates() error {
 			config *cert.CertConfig
 		}{
 			{"kubelet-client", cert.NewKubeletClientConfig(h.Name)},
+			{"kube-proxy-client", cert.NewKubeProxyClientConfig(h.Name)},
 			{"flannel-client", cert.NewFlannelClientConfig()},
 		}
 
@@ -538,9 +558,9 @@ func (cm *CertManager) GenerateClientCertificates() error {
 		}
 
 		if h.Role == host.Master {
-			logrus.Infof("Generated kubelet, controller-manager, and scheduler certificates for host %s", h.Name)
+			logrus.Infof("Generated kubelet, kube-proxy, controller-manager, and scheduler certificates for host %s", h.Name)
 		} else {
-			logrus.Infof("Generated kubelet certificate for host %s", h.Name)
+			logrus.Infof("Generated kubelet and kube-proxy certificates for host %s", h.Name)
 		}
 	}
 

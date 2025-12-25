@@ -177,6 +177,15 @@ func NewFlannelClientConfig() *CertConfig {
 	}
 }
 
+func NewKubeProxyClientConfig(nodeName string) *CertConfig {
+	return &CertConfig{
+		CommonName:   "system:kube-proxy",
+		ValidityDays: CertValidityDays,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+}
+
 func NewClusterAdminClientConfig() *CertConfig {
 	return &CertConfig{
 		CommonName:   "cluster-admin",

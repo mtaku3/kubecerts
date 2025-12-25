@@ -50,6 +50,7 @@ func (cm *CertManager) RenewExpiredCertificates() error {
 		// Check and renew certificates as needed
 		certificates := []string{
 			"kubelet-client.crt",
+			"kube-proxy-client.crt",
 			"flannel-client.crt",
 		}
 		
@@ -138,6 +139,8 @@ func (cm *CertManager) renewCertificate(h host.Host, certFile string) error {
 		return cm.regenerateAPIServerEtcdClientCert(h)
 	case "kubelet-client.crt":
 		return cm.regenerateKubeletCert(h)
+	case "kube-proxy-client.crt":
+		return cm.regenerateKubeProxyCert(h)
 	case "etcd/server.crt":
 		return cm.regenerateEtcdServerCert(h)
 	case "etcd/peer.crt":
@@ -206,7 +209,39 @@ func (cm *CertManager) regenerateAPIServerKubeletClientCert(h host.Host) error {
 }
 
 func (cm *CertManager) regenerateAPIServerEtcdClientCert(h host.Host) error {
-	logrus.Debugf("Regenerating API server etcd client certificate for %s", h.Name)
+	// Load ETCD CA
+	etcdCACertPEM, err := cm.storage.LoadCertificate(h, "etcd/ca.crt")
+	if err != nil {
+		return fmt.Errorf("failed to load ETCD CA certificate: %w", err)
+	}
+	etcdCAKeyPEM, err := cm.storage.LoadPrivateKey(h, "etcd/ca.key")
+	if err != nil {
+		return fmt.Errorf("failed to load ETCD CA key: %w", err)
+	}
+
+	etcdCACert, err := cert.ParseCertificateFromPEM(etcdCACertPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse ETCD CA certificate: %w", err)
+	}
+	etcdCAKey, err := cert.ParsePrivateKeyFromPEM(etcdCAKeyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse ETCD CA key: %w", err)
+	}
+
+	// Generate new certificate
+	newCert, err := cert.GenerateCertificate(cert.NewAPIServerEtcdClientConfig(), etcdCACert, etcdCAKey)
+	if err != nil {
+		return fmt.Errorf("failed to generate new API server ETCD client certificate: %w", err)
+	}
+
+	// Save new certificate
+	if err := cm.storage.SaveCertificate(h, "apiserver-etcd-client.crt", newCert.CertPEM); err != nil {
+		return fmt.Errorf("failed to save new API server ETCD client certificate: %w", err)
+	}
+	if err := cm.storage.SavePrivateKey(h, "apiserver-etcd-client.key", newCert.KeyPEM); err != nil {
+		return fmt.Errorf("failed to save new API server ETCD client key: %w", err)
+	}
+
 	return nil
 }
 
@@ -254,6 +289,55 @@ func (cm *CertManager) regenerateKubeletCert(h host.Host) error {
 	}
 	if err := cm.storage.SavePrivateKey(h, "kubelet-client.key", newCert.KeyPEM); err != nil {
 		return fmt.Errorf("failed to save new kubelet key: %w", err)
+	}
+
+	return nil
+}
+
+func (cm *CertManager) regenerateKubeProxyCert(h host.Host) error {
+	// Find a master node to get CA from
+	var caCertPEM, caKeyPEM []byte
+	var err error
+
+	for _, master := range cm.hosts {
+		if master.Role == host.Master && master.System == h.System {
+			caCertPEM, err = cm.storage.LoadCertificate(master, "ca.crt")
+			if err != nil {
+				continue
+			}
+			caKeyPEM, err = cm.storage.LoadPrivateKey(master, "ca.key")
+			if err != nil {
+				continue
+			}
+			break
+		}
+	}
+
+	if caCertPEM == nil {
+		return fmt.Errorf("failed to find CA certificate for system %s", h.System)
+	}
+
+	caCert, err := cert.ParseCertificateFromPEM(caCertPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA certificate: %w", err)
+	}
+	caKey, err := cert.ParsePrivateKeyFromPEM(caKeyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA key: %w", err)
+	}
+
+	// Generate new kube-proxy certificate
+	newCert, err := cert.GenerateCertificate(cert.NewKubeProxyClientConfig(h.Name), caCert, caKey)
+	if err != nil {
+		return fmt.Errorf("failed to generate new kube-proxy certificate: %w", err)
+	}
+
+	// Save new certificate
+	if err := cm.storage.SaveCertificate(h, "kube-proxy-client.crt", newCert.CertPEM); err != nil {
+		return fmt.Errorf("failed to save new kube-proxy certificate: %w", err)
+	}
+	if err := cm.storage.SavePrivateKey(h, "kube-proxy-client.key", newCert.KeyPEM); err != nil {
+		return fmt.Errorf("failed to save new kube-proxy key: %w", err)
 	}
 
 	return nil
