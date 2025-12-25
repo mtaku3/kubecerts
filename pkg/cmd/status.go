@@ -82,8 +82,10 @@ func getCertificatePriority(certFile string) int {
 			return 7
 		case "etcd/healthcheck-client.crt":
 			return 8
-		default:
+		case "flannel-etcd-client.crt":
 			return 9
+		default:
+			return 10
 		}
 	// Client certificates (priority 4)
 	case certFile == "kubelet-client.crt":
@@ -155,7 +157,7 @@ func (cm *CertManager) getCertificatesAndDiagnosticsForHost(h host.Host, now tim
 	certFiles = append(certFiles, "ca.crt", "front-proxy-ca.crt", "etcd/ca.crt")
 
 	// Add service account certificates (all hosts have these)
-	certFiles = append(certFiles, "flannel-client.crt")
+	certFiles = append(certFiles, "flannel-client.crt", "flannel-etcd-client.crt")
 
 	if h.Role == host.Master {
 		certFiles = append(certFiles,
@@ -334,6 +336,8 @@ func (cm *CertManager) getExpectedConfigForCert(h host.Host, certFile string) *c
 		return cert.NewEtcdPeerConfig(h.Name, h.AdvertiseIP)
 	case "etcd/healthcheck-client.crt":
 		return cert.NewEtcdHealthcheckClientConfig()
+	case "flannel-etcd-client.crt":
+		return cert.NewFlannelEtcdClientConfig()
 	case "kubelet-client.crt":
 		return cert.NewKubeletClientConfig(h.Name)
 	case "kube-proxy-client.crt":
@@ -362,7 +366,7 @@ func (cm *CertManager) getCAFileForCert(certFile string) string {
 		return "etcd/ca.crt"
 	case "front-proxy-client.crt":
 		return "front-proxy-ca.crt"
-	case "etcd/server.crt", "etcd/peer.crt", "etcd/healthcheck-client.crt":
+	case "etcd/server.crt", "etcd/peer.crt", "etcd/healthcheck-client.crt", "flannel-etcd-client.crt":
 		return "etcd/ca.crt"
 	default:
 		return "" // CA certificates don't have parent CAs to validate against

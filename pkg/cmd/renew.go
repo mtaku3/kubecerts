@@ -52,6 +52,7 @@ func (cm *CertManager) RenewExpiredCertificates() error {
 			"kubelet-client.crt",
 			"kube-proxy-client.crt",
 			"flannel-client.crt",
+			"flannel-etcd-client.crt",
 		}
 		
 		if h.Role == host.Master {
@@ -155,6 +156,8 @@ func (cm *CertManager) renewCertificate(h host.Host, certFile string) error {
 		return cm.regenerateSchedulerClientCert(h)
 	case "flannel-client.crt":
 		return cm.regenerateFlannelClientCert(h)
+	case "flannel-etcd-client.crt":
+		return cm.regenerateFlannelEtcdClientCert(h)
 	case "addon-manager-client.crt":
 		return cm.regenerateAddonManagerClientCert(h)
 	case "cluster-admin-client.crt":
@@ -442,4 +445,9 @@ func (cm *CertManager) regenerateAddonManagerClientCert(h host.Host) error {
 func (cm *CertManager) regenerateClusterAdminClientCert(h host.Host) error {
 	return cm.regenerateClientCertificate(h, "cluster-admin-client", 
 		cert.NewClusterAdminClientConfig(), "ca.crt")
+}
+
+func (cm *CertManager) regenerateFlannelEtcdClientCert(h host.Host) error {
+	return cm.regenerateClientCertificate(h, "flannel-etcd-client", 
+		cert.NewFlannelEtcdClientConfig(), "etcd/ca.crt")
 }

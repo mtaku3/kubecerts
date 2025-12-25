@@ -131,6 +131,15 @@ func NewEtcdHealthcheckClientConfig() *CertConfig {
 	}
 }
 
+func NewFlannelEtcdClientConfig() *CertConfig {
+	return &CertConfig{
+		CommonName:   "flannel-etcd-client",
+		ValidityDays: CertValidityDays,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+}
+
 func NewKubeletClientConfig(nodeName string) *CertConfig {
 	return &CertConfig{
 		CommonName:   "system:node:" + nodeName,
@@ -188,7 +197,7 @@ func NewKubeProxyClientConfig(nodeName string) *CertConfig {
 
 func NewClusterAdminClientConfig() *CertConfig {
 	return &CertConfig{
-		CommonName:   "cluster-admin",
+		CommonName:   "system:masters",
 		ValidityDays: CertValidityDays,
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},

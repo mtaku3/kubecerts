@@ -396,6 +396,11 @@ func (cm *CertManager) GenerateAPIServerCertificates() error {
 
 // GenerateEtcdCertificates generates etcd certificates for master nodes
 func (cm *CertManager) GenerateEtcdCertificates() error {
+	// First, generate flannel-etcd-client certificates for all nodes
+	if err := cm.generateFlannelEtcdClientCerts(); err != nil {
+		return fmt.Errorf("failed to generate flannel etcd client certificates: %w", err)
+	}
+
 	for _, h := range cm.hosts {
 		if h.Role != host.Master {
 			continue
@@ -562,6 +567,81 @@ func (cm *CertManager) GenerateClientCertificates() error {
 		} else {
 			logrus.Infof("Generated kubelet and kube-proxy certificates for host %s", h.Name)
 		}
+	}
+
+	return nil
+}
+
+// generateFlannelEtcdClientCerts generates flannel etcd client certificates for all nodes
+func (cm *CertManager) generateFlannelEtcdClientCerts() error {
+	// Group hosts by system to avoid loading ETCD CA multiple times
+	systemETCDCAs := make(map[string]struct {
+		cert *cert.CertificateBundle
+		ca   *cert.CertificateBundle
+	})
+
+	// Load ETCD CA certificates for each system
+	for _, h := range cm.hosts {
+		if h.Role != host.Master {
+			continue
+		}
+		
+		if _, exists := systemETCDCAs[h.System]; exists {
+			continue
+		}
+
+		// Load ETCD CA certificate and key
+		etcdCACertPEM, err := cm.storage.LoadCertificate(h, "etcd/ca.crt")
+		if err != nil {
+			return fmt.Errorf("failed to load ETCD CA certificate for host %s: %w", h.Name, err)
+		}
+		etcdCAKeyPEM, err := cm.storage.LoadPrivateKey(h, "etcd/ca.key")
+		if err != nil {
+			return fmt.Errorf("failed to load ETCD CA key for host %s: %w", h.Name, err)
+		}
+
+		etcdCACert, err := cert.ParseCertificateFromPEM(etcdCACertPEM)
+		if err != nil {
+			return fmt.Errorf("failed to parse ETCD CA certificate: %w", err)
+		}
+		etcdCAKey, err := cert.ParsePrivateKeyFromPEM(etcdCAKeyPEM)
+		if err != nil {
+			return fmt.Errorf("failed to parse ETCD CA key: %w", err)
+		}
+
+		systemETCDCAs[h.System] = struct {
+			cert *cert.CertificateBundle
+			ca   *cert.CertificateBundle
+		}{
+			ca: &cert.CertificateBundle{
+				Certificate: etcdCACert,
+				PrivateKey:  etcdCAKey,
+			},
+		}
+	}
+
+	// Generate flannel-etcd-client certificates for all hosts
+	for _, h := range cm.hosts {
+		systemETCDCA, exists := systemETCDCAs[h.System]
+		if !exists {
+			return fmt.Errorf("failed to find ETCD CA certificate for system %s", h.System)
+		}
+
+		// Generate flannel etcd client certificate
+		flannelEtcdClientCert, err := cert.GenerateCertificate(cert.NewFlannelEtcdClientConfig(), systemETCDCA.ca.Certificate, systemETCDCA.ca.PrivateKey)
+		if err != nil {
+			return fmt.Errorf("failed to generate flannel etcd client certificate for %s: %w", h.Name, err)
+		}
+
+		// Save certificate and key
+		if err := cm.storage.SaveCertificate(h, "flannel-etcd-client.crt", flannelEtcdClientCert.CertPEM); err != nil {
+			return fmt.Errorf("failed to save flannel etcd client certificate: %w", err)
+		}
+		if err := cm.storage.SavePrivateKey(h, "flannel-etcd-client.key", flannelEtcdClientCert.KeyPEM); err != nil {
+			return fmt.Errorf("failed to save flannel etcd client key: %w", err)
+		}
+
+		logrus.Infof("Generated flannel etcd client certificate for host %s", h.Name)
 	}
 
 	return nil
