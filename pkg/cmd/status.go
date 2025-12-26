@@ -113,6 +113,11 @@ func (cm *CertManager) ShowCertificateStatus(verbose bool) error {
 		certs, diagnostics := cm.getCertificatesAndDiagnosticsForHost(h, now)
 		allCerts = append(allCerts, certs...)
 		allDiagnostics = append(allDiagnostics, diagnostics...)
+		
+		// Get user certificates for this host
+		userCerts, userDiagnostics := cm.getUserCertificatesAndDiagnosticsForHost(h, now)
+		allCerts = append(allCerts, userCerts...)
+		allDiagnostics = append(allDiagnostics, userDiagnostics...)
 	}
 
 	// Sort by host first, then by certificate type for better readability
@@ -209,6 +214,168 @@ func (cm *CertManager) getCertificatesAndDiagnosticsForHost(h host.Host, now tim
 	}
 
 	return certs, diagnostics
+}
+
+func (cm *CertManager) getUserCertificatesAndDiagnosticsForHost(h host.Host, now time.Time) ([]CertificateInfo, []DiagnosticInfo) {
+	var certs []CertificateInfo
+	var diagnostics []DiagnosticInfo
+
+	// Check certificates for each kubectl user
+	for _, user := range h.KubectlUsers {
+		userCertFiles := []string{"ca.crt", "cluster-admin.crt"}
+		
+		for _, certFile := range userCertFiles {
+			certInfo := cm.getUserCertificateInfo(h, user.Name, certFile, now)
+			if certInfo != nil {
+				certs = append(certs, *certInfo)
+				
+				// Get diagnostic information for existing certificates with issues
+				if certInfo.Status != "OK" {
+					diagInfo := cm.getUserDiagnosticInfo(h, user.Name, certFile)
+					if len(diagInfo.Errors) > 0 || len(diagInfo.Warnings) > 0 {
+						diagnostics = append(diagnostics, diagInfo)
+					}
+				}
+			} else {
+				// Add missing certificate entry
+				certs = append(certs, CertificateInfo{
+					Host:            h.Name,
+					Role:            "User:" + user.Name,
+					CertificateFile: "users/" + user.Name + "/homelab-k8s/" + certFile,
+					Subject:         "N/A",
+					Issuer:          "N/A",
+					DaysLeft:        0,
+					Status:          "MISSING",
+				})
+				
+				// Add diagnostic for missing certificate
+				diagnostics = append(diagnostics, DiagnosticInfo{
+					Host:            h.Name,
+					CertificateFile: "users/" + user.Name + "/homelab-k8s/" + certFile,
+					Errors:          []string{"User certificate file does not exist"},
+					Warnings:        []string{},
+				})
+			}
+		}
+	}
+
+	return certs, diagnostics
+}
+
+func (cm *CertManager) getUserCertificateInfo(h host.Host, userName, certFile string, now time.Time) *CertificateInfo {
+	// Check if certificate exists
+	if !cm.storage.UserCertificateExists(h, userName, "homelab-k8s", certFile) {
+		return nil
+	}
+
+	// Load certificate
+	certPEM, err := cm.storage.LoadUserCertificate(h, userName, "homelab-k8s", certFile)
+	if err != nil {
+		return &CertificateInfo{
+			Host:            h.Name,
+			Role:            "User:" + userName,
+			CertificateFile: "users/" + userName + "/homelab-k8s/" + certFile,
+			Subject:         "Error",
+			Issuer:          "Error",
+			DaysLeft:        0,
+			Status:          fmt.Sprintf("ERROR: %v", err),
+		}
+	}
+
+	// Parse certificate
+	certData, err := cert.ParseCertificateFromPEM(certPEM)
+	if err != nil {
+		return &CertificateInfo{
+			Host:            h.Name,
+			Role:            "User:" + userName,
+			CertificateFile: "users/" + userName + "/homelab-k8s/" + certFile,
+			Subject:         "Error",
+			Issuer:          "Error",
+			DaysLeft:        0,
+			Status:          fmt.Sprintf("ERROR: %v", err),
+		}
+	}
+
+	// Calculate days left
+	daysLeft := int(certData.NotAfter.Sub(now).Hours() / 24)
+	
+	// Determine status
+	status := "OK"
+	if daysLeft <= 0 {
+		status = "EXPIRED"
+	} else if daysLeft <= 7 {
+		status = "CRITICAL"
+	} else if daysLeft <= 30 {
+		status = "WARNING"
+	}
+
+	return &CertificateInfo{
+		Host:            h.Name,
+		Role:            "User:" + userName,
+		CertificateFile: "users/" + userName + "/homelab-k8s/" + certFile,
+		Subject:         certData.Subject.String(),
+		Issuer:          certData.Issuer.String(),
+		DaysLeft:        daysLeft,
+		Status:          status,
+	}
+}
+
+func (cm *CertManager) getUserDiagnosticInfo(h host.Host, userName, certFile string) DiagnosticInfo {
+	var errors []string
+	var warnings []string
+
+	// Try to load certificate
+	certPEM, err := cm.storage.LoadUserCertificate(h, userName, "homelab-k8s", certFile)
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("Failed to load certificate: %v", err))
+		return DiagnosticInfo{
+			Host:            h.Name,
+			CertificateFile: "users/" + userName + "/homelab-k8s/" + certFile,
+			Errors:          errors,
+			Warnings:        warnings,
+		}
+	}
+
+	// Parse and validate certificate
+	certData, err := cert.ParseCertificateFromPEM(certPEM)
+	if err != nil {
+		errors = append(errors, fmt.Sprintf("Failed to parse certificate: %v", err))
+		return DiagnosticInfo{
+			Host:            h.Name,
+			CertificateFile: "users/" + userName + "/homelab-k8s/" + certFile,
+			Errors:          errors,
+			Warnings:        warnings,
+		}
+	}
+
+	// Check if it's a CA certificate
+	if certFile == "ca.crt" {
+		if !certData.IsCA {
+			errors = append(errors, "Certificate is not marked as a CA")
+		}
+		
+		// Load expected config for CA certificate
+		expectedConfig := cm.getExpectedConfigForCert(h, certFile)
+		if expectedConfig != nil && certData.Subject.CommonName != expectedConfig.CommonName {
+			warnings = append(warnings, fmt.Sprintf("Certificate CN '%s' doesn't match expected '%s'", 
+				certData.Subject.CommonName, expectedConfig.CommonName))
+		}
+	} else if certFile == "cluster-admin.crt" {
+		// Validate cluster-admin certificate
+		expectedOrg := []string{"system:masters"}
+		if len(certData.Subject.Organization) != len(expectedOrg) || 
+		   (len(certData.Subject.Organization) > 0 && certData.Subject.Organization[0] != expectedOrg[0]) {
+			errors = append(errors, fmt.Sprintf("Certificate organization '%v' doesn't match expected '%v'", 
+				certData.Subject.Organization, expectedOrg))
+		}
+	}
+
+	return DiagnosticInfo{
+		Host:            h.Name,
+		CertificateFile: "users/" + userName + "/homelab-k8s/" + certFile,
+		Errors:          errors,
+		Warnings:        warnings,
+	}
 }
 
 func (cm *CertManager) getCertificateInfo(h host.Host, certFile string, now time.Time) *CertificateInfo {

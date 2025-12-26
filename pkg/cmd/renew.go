@@ -85,6 +85,26 @@ func (cm *CertManager) RenewExpiredCertificates() error {
 		}
 	}
 
+	// Check and renew user certificates
+	for _, h := range cm.hosts {
+		for _, user := range h.KubectlUsers {
+			userCertificates := []string{"cluster-admin.crt"}
+			
+			for _, certFile := range userCertificates {
+				if needsRenewal, err := cm.userCertificateNeedsRenewal(h, user.Name, certFile, now, renewalThreshold); err != nil {
+					logrus.Warnf("Failed to check renewal status for user %s cert %s on %s: %v", user.Name, certFile, h.Name, err)
+				} else if needsRenewal {
+					if err := cm.renewUserCertificate(h, user.Name, certFile); err != nil {
+						logrus.Errorf("Failed to renew %s for user %s on %s: %v", certFile, user.Name, h.Name, err)
+					} else {
+						logrus.Infof("Renewed %s for user %s on %s", certFile, user.Name, h.Name)
+						renewed++
+					}
+				}
+			}
+		}
+	}
+
 	logrus.Infof("Certificate renewal complete. %d certificates renewed.", renewed)
 	return nil
 }
@@ -93,6 +113,44 @@ func (cm *CertManager) RenewExpiredCertificates() error {
 func (cm *CertManager) RenewSpecificCertificate(certName string) error {
 	logrus.Infof("Renewing specific certificate: %s", certName)
 
+	// Check if this is a user certificate pattern (e.g., "user:username:cluster-admin.crt")
+	if strings.HasPrefix(certName, "user:") {
+		parts := strings.Split(certName, ":")
+		if len(parts) != 3 {
+			return fmt.Errorf("invalid user certificate format. Use 'user:username:certificate-name'")
+		}
+		
+		userName := parts[1]
+		certFile := parts[2]
+		
+		renewed := 0
+		for _, h := range cm.hosts {
+			// Check if this user exists on this host
+			userExists := false
+			for _, user := range h.KubectlUsers {
+				if user.Name == userName {
+					userExists = true
+					break
+				}
+			}
+			
+			if !userExists {
+				continue
+			}
+			
+			if err := cm.renewUserCertificate(h, userName, certFile); err != nil {
+				logrus.Warnf("Failed to renew %s for user %s on %s: %v", certFile, userName, h.Name, err)
+			} else {
+				logrus.Infof("Renewed %s for user %s on %s", certFile, userName, h.Name)
+				renewed++
+			}
+		}
+		
+		logrus.Infof("Renewed %s for user %s on %d hosts", certFile, userName, renewed)
+		return nil
+	}
+
+	// Regular certificate renewal
 	renewed := 0
 	for _, h := range cm.hosts {
 		if err := cm.renewCertificate(h, certName); err != nil {
@@ -124,6 +182,90 @@ func (cm *CertManager) certificateNeedsRenewal(h host.Host, certFile string, now
 
 	timeUntilExpiry := certificate.NotAfter.Sub(now)
 	return timeUntilExpiry < threshold, nil
+}
+
+func (cm *CertManager) userCertificateNeedsRenewal(h host.Host, userName, certFile string, now time.Time, threshold time.Duration) (bool, error) {
+	// Check if certificate exists
+	if !cm.storage.UserCertificateExists(h, userName, "homelab-k8s", certFile) {
+		// Certificate doesn't exist, needs to be created
+		return true, nil
+	}
+
+	// Load certificate
+	certPEM, err := cm.storage.LoadUserCertificate(h, userName, "homelab-k8s", certFile)
+	if err != nil {
+		return false, fmt.Errorf("failed to load certificate: %w", err)
+	}
+
+	// Parse certificate
+	certData, err := cert.ParseCertificateFromPEM(certPEM)
+	if err != nil {
+		return false, fmt.Errorf("failed to parse certificate: %w", err)
+	}
+
+	// Check expiration
+	timeLeft := certData.NotAfter.Sub(now)
+	return timeLeft < threshold, nil
+}
+
+func (cm *CertManager) renewUserCertificate(h host.Host, userName, certFile string) error {
+	switch certFile {
+	case "cluster-admin.crt":
+		return cm.regenerateUserClusterAdminCert(h, userName)
+	default:
+		return fmt.Errorf("unknown user certificate type: %s", certFile)
+	}
+}
+
+func (cm *CertManager) regenerateUserClusterAdminCert(h host.Host, userName string) error {
+	// Find a master node with the same system to get the CA
+	var caHost *host.Host
+	for _, master := range cm.hosts {
+		if master.Role == host.Master && master.System == h.System {
+			caHost = &master
+			break
+		}
+	}
+	
+	if caHost == nil {
+		return fmt.Errorf("no master found for system %s", h.System)
+	}
+
+	// Load CA certificate and key
+	caCertPEM, err := cm.storage.LoadCertificate(*caHost, "ca.crt")
+	if err != nil {
+		return fmt.Errorf("failed to load CA certificate: %w", err)
+	}
+	caKeyPEM, err := cm.storage.LoadPrivateKey(*caHost, "ca.key")
+	if err != nil {
+		return fmt.Errorf("failed to load CA key: %w", err)
+	}
+
+	caCert, err := cert.ParseCertificateFromPEM(caCertPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA certificate: %w", err)
+	}
+	caKey, err := cert.ParsePrivateKeyFromPEM(caKeyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA key: %w", err)
+	}
+
+	// Generate new cluster-admin certificate
+	config := cert.NewClusterAdminClientConfig()
+	generatedCert, err := cert.GenerateCertificate(config, caCert, caKey)
+	if err != nil {
+		return fmt.Errorf("failed to generate certificate: %w", err)
+	}
+
+	// Save renewed certificate and key
+	if err := cm.storage.SaveUserCertificate(h, userName, "homelab-k8s", "cluster-admin.crt", generatedCert.CertPEM); err != nil {
+		return fmt.Errorf("failed to save certificate: %w", err)
+	}
+	if err := cm.storage.SaveUserPrivateKey(h, userName, "homelab-k8s", "cluster-admin.key", generatedCert.KeyPEM); err != nil {
+		return fmt.Errorf("failed to save key: %w", err)
+	}
+
+	return nil
 }
 
 func (cm *CertManager) renewCertificate(h host.Host, certFile string) error {

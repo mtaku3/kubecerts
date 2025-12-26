@@ -38,6 +38,91 @@ func (sm *StorageManager) GetHostPath(host host.Host) string {
 	return filepath.Join(sm.basePath, host.System, host.Name, PKISubPath)
 }
 
+func (sm *StorageManager) GetUserPath(host host.Host, userName, clusterName string) string {
+	return filepath.Join(sm.basePath, host.System, host.Name, "users", userName, clusterName)
+}
+
+func (sm *StorageManager) EnsureUserDirectory(host host.Host, userName, clusterName string) error {
+	userPath := sm.GetUserPath(host, userName, clusterName)
+	return os.MkdirAll(userPath, 0755)
+}
+
+func (sm *StorageManager) SaveUserCertificate(host host.Host, userName, clusterName, filename string, certPEM []byte) error {
+	if err := sm.EnsureUserDirectory(host, userName, clusterName); err != nil {
+		return err
+	}
+	
+	userPath := sm.GetUserPath(host, userName, clusterName)
+	fullPath := filepath.Join(userPath, filename+".age")
+
+	// Encrypt the data
+	encryptedData, err := sm.crypto.Encrypt(certPEM)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt user certificate data: %w", err)
+	}
+
+	// Write to file
+	if err := os.WriteFile(fullPath, encryptedData, 0644); err != nil {
+		return fmt.Errorf("failed to write user certificate file %s: %w", fullPath, err)
+	}
+
+	logrus.Debugf("Saved encrypted user certificate %s for user %s on host %s", filename, userName, host.Name)
+	return nil
+}
+
+func (sm *StorageManager) SaveUserPrivateKey(host host.Host, userName, clusterName, filename string, keyPEM []byte) error {
+	if err := sm.EnsureUserDirectory(host, userName, clusterName); err != nil {
+		return err
+	}
+	
+	userPath := sm.GetUserPath(host, userName, clusterName)
+	fullPath := filepath.Join(userPath, filename+".age")
+
+	// Encrypt the data
+	encryptedData, err := sm.crypto.Encrypt(keyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt user private key data: %w", err)
+	}
+
+	// Write to file with restricted permissions
+	if err := os.WriteFile(fullPath, encryptedData, 0600); err != nil {
+		return fmt.Errorf("failed to write user private key file %s: %w", fullPath, err)
+	}
+
+	logrus.Debugf("Saved encrypted user private key %s for user %s on host %s", filename, userName, host.Name)
+	return nil
+}
+
+func (sm *StorageManager) LoadUserCertificate(host host.Host, userName, clusterName, filename string) ([]byte, error) {
+	userPath := sm.GetUserPath(host, userName, clusterName)
+	fullPath := filepath.Join(userPath, filename+".age")
+
+	// Read encrypted file
+	encryptedData, err := os.ReadFile(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("certificate file does not exist: %s", fullPath)
+		}
+		return nil, fmt.Errorf("failed to read user certificate file %s: %w", fullPath, err)
+	}
+
+	// Decrypt the data
+	decryptedData, err := sm.crypto.Decrypt(encryptedData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt user certificate data: %w", err)
+	}
+
+	return decryptedData, nil
+}
+
+func (sm *StorageManager) UserCertificateExists(host host.Host, userName, clusterName, filename string) bool {
+	userPath := sm.GetUserPath(host, userName, clusterName)
+	fullPath := filepath.Join(userPath, filename+".age")
+	
+	_, err := os.Stat(fullPath)
+	return err == nil
+}
+
 // GetCAPath returns the path for CA certificates (shared across all hosts)
 func (sm *StorageManager) GetCAPath(system string) string {
 	return filepath.Join(sm.basePath, system, "ca")

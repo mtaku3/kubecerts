@@ -56,6 +56,8 @@ func NewCertsCommand() *cobra.Command {
 	cmd.AddCommand(newCertsEtcdCommand())
 	cmd.AddCommand(newCertsSACommand())
 	cmd.AddCommand(newCertsClientCommand())
+	cmd.AddCommand(newCertsUserCommand())
+	cmd.AddCommand(newCertsDebugCommand())
 
 	return cmd
 }
@@ -180,6 +182,55 @@ func newCertsClientCommand() *cobra.Command {
 
 			logrus.Info("Generating client certificates...")
 			return cm.GenerateClientCertificates()
+		},
+	}
+}
+
+func newCertsUserCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "user",
+		Short: "Generate user certificates",
+		Long:  "Copy ca.crt and generate cluster-admin certificates for kubectl-enabled users",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cm, err := NewCertManager()
+			if err != nil {
+				return err
+			}
+
+			logrus.Info("Generating user certificates for homelab-k8s cluster...")
+			return cm.GenerateUserCertificates("homelab-k8s")
+		},
+	}
+	
+	return cmd
+}
+
+func newCertsDebugCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "debug",
+		Short: "Debug host and user discovery",
+		Long:  "Show discovered hosts and kubectl users for debugging",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			hosts, err := host.GetHosts()
+			if err != nil {
+				return fmt.Errorf("failed to get hosts: %w", err)
+			}
+
+			for _, h := range hosts {
+				logrus.Infof("Host: %s (System: %s, Role: %s, AdvertiseIP: %s)", 
+					h.Name, h.System, h.Role.String(), h.AdvertiseIP)
+				
+				if len(h.KubectlUsers) > 0 {
+					logrus.Infof("  Kubectl users:")
+					for _, user := range h.KubectlUsers {
+						logrus.Infof("    - %s", user.Name)
+					}
+				} else {
+					logrus.Infof("  No kubectl users found")
+				}
+			}
+			
+			return nil
 		},
 	}
 }
@@ -566,6 +617,92 @@ func (cm *CertManager) GenerateClientCertificates() error {
 			logrus.Infof("Generated kubelet, kube-proxy, controller-manager, and scheduler certificates for host %s", h.Name)
 		} else {
 			logrus.Infof("Generated kubelet and kube-proxy certificates for host %s", h.Name)
+		}
+	}
+
+	return nil
+}
+
+func (cm *CertManager) GenerateUserCertificates(clusterName string) error {
+	logrus.Info("Generating user certificates...")
+
+	// Group hosts by system to avoid loading CA multiple times
+	systemCAs := make(map[string]*cert.CertificateBundle)
+
+	// Load CA certificates for each system
+	for _, h := range cm.hosts {
+		if h.Role != host.Master {
+			continue
+		}
+		
+		if _, exists := systemCAs[h.System]; exists {
+			continue
+		}
+
+		// Load CA certificate and key
+		caCertPEM, err := cm.storage.LoadCertificate(h, "ca.crt")
+		if err != nil {
+			return fmt.Errorf("failed to load CA certificate for host %s: %w", h.Name, err)
+		}
+		caKeyPEM, err := cm.storage.LoadPrivateKey(h, "ca.key")
+		if err != nil {
+			return fmt.Errorf("failed to load CA key for host %s: %w", h.Name, err)
+		}
+
+		caCert, err := cert.ParseCertificateFromPEM(caCertPEM)
+		if err != nil {
+			return fmt.Errorf("failed to parse CA certificate: %w", err)
+		}
+		caKey, err := cert.ParsePrivateKeyFromPEM(caKeyPEM)
+		if err != nil {
+			return fmt.Errorf("failed to parse CA key: %w", err)
+		}
+
+		systemCAs[h.System] = &cert.CertificateBundle{
+			Certificate: caCert,
+			PrivateKey:  caKey,
+		}
+	}
+
+	// Generate certificates for kubectl users on each host
+	for _, h := range cm.hosts {
+		systemCA, exists := systemCAs[h.System]
+		if !exists {
+			logrus.Warnf("No CA found for system %s, skipping host %s", h.System, h.Name)
+			continue
+		}
+
+		// Copy CA certificate for each kubectl user
+		caCertPEM, err := cm.storage.LoadCertificate(h, "ca.crt")
+		if err != nil {
+			return fmt.Errorf("failed to load CA certificate for copying to users: %w", err)
+		}
+
+		for _, user := range h.KubectlUsers {
+			logrus.Infof("Generating certificates for user %s on host %s", user.Name, h.Name)
+
+			// Copy ca.crt to user directory
+			if err := cm.storage.SaveUserCertificate(h, user.Name, clusterName, "ca.crt", caCertPEM); err != nil {
+				return fmt.Errorf("failed to save CA certificate for user %s: %w", user.Name, err)
+			}
+
+			// Generate cluster-admin certificate for user
+			clusterAdminConfig := cert.NewClusterAdminClientConfig()
+			
+			generatedCert, err := cert.GenerateCertificate(clusterAdminConfig, systemCA.Certificate, systemCA.PrivateKey)
+			if err != nil {
+				return fmt.Errorf("failed to generate cluster-admin certificate for user %s: %w", user.Name, err)
+			}
+
+			// Save cluster-admin certificate and key
+			if err := cm.storage.SaveUserCertificate(h, user.Name, clusterName, "cluster-admin.crt", generatedCert.CertPEM); err != nil {
+				return fmt.Errorf("failed to save cluster-admin certificate for user %s: %w", user.Name, err)
+			}
+			if err := cm.storage.SaveUserPrivateKey(h, user.Name, clusterName, "cluster-admin.key", generatedCert.KeyPEM); err != nil {
+				return fmt.Errorf("failed to save cluster-admin key for user %s: %w", user.Name, err)
+			}
+
+			logrus.Infof("Generated certificates for user %s on host %s", user.Name, h.Name)
 		}
 	}
 

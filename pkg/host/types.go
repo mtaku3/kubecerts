@@ -36,11 +36,50 @@ func (r KubernetesRole) String() string {
 	}
 }
 
+type User struct {
+	Name string `json:"name"`
+}
+
 type Host struct {
 	Name        string         `json:"name"`
 	System      string         `json:"system"`
 	AdvertiseIP string         `json:"advertiseIP"`
-	Role        KubernetesRole `json:"role"`
+	Role         KubernetesRole `json:"role"`
+	KubectlUsers []User         `json:"kubectlUsers"`
+}
+
+func getKubectlUsers(hostName string) ([]User, error) {
+	// Get all users for this host
+	cmd := exec.Command("nix", "eval", fmt.Sprintf(".#nixosConfigurations.%s.config.home-manager.users", hostName), "--apply", "builtins.attrNames", "--json")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve users from nix for host %s: %w", hostName, err)
+	}
+
+	var userNames []string
+	if err := json.Unmarshal(out, &userNames); err != nil {
+		return nil, fmt.Errorf("failed to parse user names for host %s: %w", hostName, err)
+	}
+
+	var kubectlUsers []User
+	for _, userName := range userNames {
+		// Check if kubectl is enabled for this user
+		cmd := exec.Command("nix", "eval", fmt.Sprintf(".#nixosConfigurations.%s.config.home-manager.users.%s.capybara.app.dev.kube-cli.enable", hostName, userName))
+		out, err := cmd.Output()
+		if err != nil {
+			// If the path doesn't exist, kubectl is not enabled for this user
+			continue
+		}
+		
+		isKubectlEnabled := strings.TrimSpace(string(out))
+		if isKubectlEnabled == "true" {
+			kubectlUsers = append(kubectlUsers, User{
+				Name: userName,
+			})
+		}
+	}
+
+	return kubectlUsers, nil
 }
 
 func GetHosts() ([]Host, error) {
@@ -93,11 +132,18 @@ func GetHosts() ([]Host, error) {
 		var role KubernetesRole
 		role.FromString(strings.TrimSpace(string(out)))
 
+		// Get kubectl users for this host
+		kubectlUsers, err := getKubectlUsers(hostName)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get kubectl users for host %s: %w", hostName, err)
+		}
+
 		hosts = append(hosts, Host{
-			Name:        hostName,
-			System:      system,
-			AdvertiseIP: advertiseIP,
-			Role:        role,
+			Name:         hostName,
+			System:       system,
+			AdvertiseIP:  advertiseIP,
+			Role:         role,
+			KubectlUsers: kubectlUsers,
 		})
 	}
 
