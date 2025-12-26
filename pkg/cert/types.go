@@ -197,7 +197,8 @@ func NewKubeProxyClientConfig(nodeName string) *CertConfig {
 
 func NewClusterAdminClientConfig() *CertConfig {
 	return &CertConfig{
-		CommonName:   "system:masters",
+		CommonName:   "cluster-admin",
+		Organization: []string{"system:masters"},
 		ValidityDays: CertValidityDays,
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
