@@ -3,6 +3,10 @@ package cert
 import (
 	"crypto/rsa"
 	"crypto/x509"
+	"fmt"
+	"net"
+	"os/exec"
+	"strings"
 )
 
 // Certificate types and configurations
@@ -62,10 +66,38 @@ func NewEtcdCAConfig() *CertConfig {
 }
 
 func NewAPIServerConfig(hostName, hostIP string) *CertConfig {
+	// Get additional configuration values from nix
+	clusterDomain, masterAddress := getKubernetesConfigValues(hostName)
+	
+	// Build DNS names list
+	dnsNames := []string{
+		hostName,
+		"kubernetes.default.svc",
+	}
+	
+	// Add cluster domain based SANs
+	if clusterDomain != "" {
+		dnsNames = append(dnsNames, "kubernetes.default.svc."+clusterDomain)
+	}
+	
+	// Build IP addresses list
+	ipAddresses := []string{hostIP, "10.0.0.1"}
+	
+	// Add masterAddress - it could be either IP or domain
+	if masterAddress != "" {
+		if net.ParseIP(masterAddress) != nil {
+			// It's an IP address
+			ipAddresses = append(ipAddresses, masterAddress)
+		} else {
+			// It's a domain name
+			dnsNames = append(dnsNames, masterAddress)
+		}
+	}
+	
 	return &CertConfig{
 		CommonName:   "kube-apiserver",
-		DNSNames:     []string{hostName},
-		IPAddresses:  []string{hostIP},
+		DNSNames:     dnsNames,
+		IPAddresses:  ipAddresses,
 		ValidityDays: CertValidityDays,
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
@@ -101,10 +133,39 @@ func NewFrontProxyClientConfig() *CertConfig {
 }
 
 func NewEtcdServerConfig(hostName, hostIP string) *CertConfig {
+	// Get additional configuration values from nix
+	clusterDomain, masterAddress := getKubernetesConfigValues(hostName)
+	
+	// Build DNS names list
+	dnsNames := []string{
+		hostName,
+		"localhost",
+		"etcd.local",
+	}
+	
+	// Add cluster domain based SANs
+	if clusterDomain != "" {
+		dnsNames = append(dnsNames, "etcd."+clusterDomain)
+	}
+	
+	// Build IP addresses list
+	ipAddresses := []string{hostIP, "127.0.0.1"}
+	
+	// Add masterAddress - it could be either IP or domain
+	if masterAddress != "" {
+		if net.ParseIP(masterAddress) != nil {
+			// It's an IP address
+			ipAddresses = append(ipAddresses, masterAddress)
+		} else {
+			// It's a domain name
+			dnsNames = append(dnsNames, masterAddress)
+		}
+	}
+	
 	return &CertConfig{
 		CommonName:   "kube-etcd",
-		DNSNames:     []string{hostName, "localhost"},
-		IPAddresses:  []string{hostIP, "127.0.0.1"},
+		DNSNames:     dnsNames,
+		IPAddresses:  ipAddresses,
 		ValidityDays: CertValidityDays,
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
@@ -112,10 +173,39 @@ func NewEtcdServerConfig(hostName, hostIP string) *CertConfig {
 }
 
 func NewEtcdPeerConfig(hostName, hostIP string) *CertConfig {
+	// Get additional configuration values from nix
+	clusterDomain, masterAddress := getKubernetesConfigValues(hostName)
+	
+	// Build DNS names list
+	dnsNames := []string{
+		hostName,
+		"localhost",
+		"etcd.local",
+	}
+	
+	// Add cluster domain based SANs
+	if clusterDomain != "" {
+		dnsNames = append(dnsNames, "etcd."+clusterDomain)
+	}
+	
+	// Build IP addresses list
+	ipAddresses := []string{hostIP, "127.0.0.1"}
+	
+	// Add masterAddress - it could be either IP or domain
+	if masterAddress != "" {
+		if net.ParseIP(masterAddress) != nil {
+			// It's an IP address
+			ipAddresses = append(ipAddresses, masterAddress)
+		} else {
+			// It's a domain name
+			dnsNames = append(dnsNames, masterAddress)
+		}
+	}
+
 	return &CertConfig{
 		CommonName:   "kube-etcd-peer",
-		DNSNames:     []string{hostName, "localhost"},
-		IPAddresses:  []string{hostIP, "127.0.0.1"},
+		DNSNames:     dnsNames,
+		IPAddresses:  ipAddresses,
 		ValidityDays: CertValidityDays,
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
@@ -147,6 +237,18 @@ func NewKubeletClientConfig(nodeName string) *CertConfig {
 		ValidityDays: CertValidityDays,
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+}
+
+// NewKubeletServerConfig creates configuration for kubelet server certificate (CN=hostname)
+func NewKubeletServerConfig(hostName, hostIP string) *CertConfig {
+	return &CertConfig{
+		CommonName:   hostName,
+		DNSNames:     []string{hostName},
+		IPAddresses:  []string{hostIP},
+		ValidityDays: CertValidityDays,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 }
 
@@ -203,4 +305,27 @@ func NewClusterAdminClientConfig() *CertConfig {
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
+}
+
+// getKubernetesConfigValues retrieves cluster configuration from nix
+func getKubernetesConfigValues(hostName string) (clusterDomain, masterAddress string) {
+	// Get cluster domain
+	cmd := exec.Command("nix", "eval", "--raw", fmt.Sprintf(".#nixosConfigurations.%s.config.services.kubernetes.addons.dns.clusterDomain", hostName))
+	out, err := cmd.Output()
+	if err == nil {
+		clusterDomain = strings.TrimSpace(string(out))
+	}
+	// If not found or error, use default
+	if clusterDomain == "" {
+		clusterDomain = "cluster.local"
+	}
+	
+	// Get master address
+	cmd = exec.Command("nix", "eval", "--raw", fmt.Sprintf(".#nixosConfigurations.%s.config.services.kubernetes.masterAddress", hostName))
+	out, err = cmd.Output()
+	if err == nil {
+		masterAddress = strings.TrimSpace(string(out))
+	}
+	
+	return clusterDomain, masterAddress
 }

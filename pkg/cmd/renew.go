@@ -58,6 +58,7 @@ func (cm *CertManager) RenewExpiredCertificates() error {
 		if h.Role == host.Master {
 			certificates = append(certificates,
 				"apiserver.crt",
+				"kubelet.crt",
 				"apiserver-kubelet-client.crt", 
 				"apiserver-etcd-client.crt",
 				"front-proxy-client.crt",
@@ -276,6 +277,8 @@ func (cm *CertManager) renewCertificate(h host.Host, certFile string) error {
 	switch certFile {
 	case "apiserver.crt":
 		return cm.regenerateAPIServerCert(h)
+	case "kubelet.crt":
+		return cm.regenerateKubeletServerCert(h)
 	case "apiserver-kubelet-client.crt":
 		return cm.regenerateAPIServerKubeletClientCert(h)
 	case "apiserver-etcd-client.crt":
@@ -436,6 +439,44 @@ func (cm *CertManager) regenerateKubeletCert(h host.Host) error {
 		return fmt.Errorf("failed to save new kubelet key: %w", err)
 	}
 
+	return nil
+}
+
+func (cm *CertManager) regenerateKubeletServerCert(h host.Host) error {
+	// Load CA
+	caCertPEM, err := cm.storage.LoadCertificate(h, "ca.crt")
+	if err != nil {
+		return fmt.Errorf("failed to load CA certificate: %w", err)
+	}
+	caKeyPEM, err := cm.storage.LoadPrivateKey(h, "ca.key")
+	if err != nil {
+		return fmt.Errorf("failed to load CA key: %w", err)
+	}
+
+	caCert, err := cert.ParseCertificateFromPEM(caCertPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA certificate: %w", err)
+	}
+	caKey, err := cert.ParsePrivateKeyFromPEM(caKeyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA key: %w", err)
+	}
+
+	// Generate new kubelet server certificate
+	newCert, err := cert.GenerateCertificate(cert.NewKubeletServerConfig(h.Name, h.AdvertiseIP), caCert, caKey)
+	if err != nil {
+		return fmt.Errorf("failed to generate new kubelet server certificate: %w", err)
+	}
+
+	// Save new certificate
+	if err := cm.storage.SaveCertificate(h, "kubelet.crt", newCert.CertPEM); err != nil {
+		return fmt.Errorf("failed to save new kubelet server certificate: %w", err)
+	}
+	if err := cm.storage.SavePrivateKey(h, "kubelet.key", newCert.KeyPEM); err != nil {
+		return fmt.Errorf("failed to save new kubelet server key: %w", err)
+	}
+
+	logrus.Debugf("Successfully regenerated kubelet server certificate for %s", h.Name)
 	return nil
 }
 

@@ -413,6 +413,12 @@ func (cm *CertManager) GenerateAPIServerCertificates() error {
 			return fmt.Errorf("failed to generate front-proxy client certificate: %w", err)
 		}
 
+		// Generate kubelet server certificate
+		kubeletServerCert, err := cert.GenerateCertificate(cert.NewKubeletServerConfig(h.Name, h.AdvertiseIP), caCert, caKey)
+		if err != nil {
+			return fmt.Errorf("failed to generate kubelet server certificate: %w", err)
+		}
+
 		// Save certificates
 		if err := cm.storage.SaveCertificate(h, "apiserver.crt", apiServerCert.CertPEM); err != nil {
 			return fmt.Errorf("failed to save API server certificate: %w", err)
@@ -437,6 +443,12 @@ func (cm *CertManager) GenerateAPIServerCertificates() error {
 		}
 		if err := cm.storage.SavePrivateKey(h, "front-proxy-client.key", frontProxyClientCert.KeyPEM); err != nil {
 			return fmt.Errorf("failed to save front-proxy client key: %w", err)
+		}
+		if err := cm.storage.SaveCertificate(h, "kubelet.crt", kubeletServerCert.CertPEM); err != nil {
+			return fmt.Errorf("failed to save kubelet certificate: %w", err)
+		}
+		if err := cm.storage.SavePrivateKey(h, "kubelet.key", kubeletServerCert.KeyPEM); err != nil {
+			return fmt.Errorf("failed to save kubelet key: %w", err)
 		}
 
 		logrus.Infof("Generated API server certificates for host %s", h.Name)
