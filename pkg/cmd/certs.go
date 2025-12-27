@@ -419,6 +419,12 @@ func (cm *CertManager) GenerateAPIServerCertificates() error {
 			return fmt.Errorf("failed to generate kubelet server certificate: %w", err)
 		}
 
+		// Generate controller-manager server certificate
+		controllerManagerCert, err := cert.GenerateCertificate(cert.NewControllerManagerServerConfig(h.Name, h.AdvertiseIP), caCert, caKey)
+		if err != nil {
+			return fmt.Errorf("failed to generate controller-manager server certificate: %w", err)
+		}
+
 		// Save certificates
 		if err := cm.storage.SaveCertificate(h, "apiserver.crt", apiServerCert.CertPEM); err != nil {
 			return fmt.Errorf("failed to save API server certificate: %w", err)
@@ -449,6 +455,12 @@ func (cm *CertManager) GenerateAPIServerCertificates() error {
 		}
 		if err := cm.storage.SavePrivateKey(h, "kubelet.key", kubeletServerCert.KeyPEM); err != nil {
 			return fmt.Errorf("failed to save kubelet key: %w", err)
+		}
+		if err := cm.storage.SaveCertificate(h, "controller-manager.crt", controllerManagerCert.CertPEM); err != nil {
+			return fmt.Errorf("failed to save controller-manager certificate: %w", err)
+		}
+		if err := cm.storage.SavePrivateKey(h, "controller-manager.key", controllerManagerCert.KeyPEM); err != nil {
+			return fmt.Errorf("failed to save controller-manager key: %w", err)
 		}
 
 		logrus.Infof("Generated API server certificates for host %s", h.Name)

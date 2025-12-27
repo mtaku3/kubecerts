@@ -252,6 +252,49 @@ func NewKubeletServerConfig(hostName, hostIP string) *CertConfig {
 	}
 }
 
+// NewControllerManagerServerConfig creates configuration for controller-manager server certificate
+// Uses same SANs as apiserver but with CN=kube-controller-manager
+func NewControllerManagerServerConfig(hostName, hostIP string) *CertConfig {
+	// Get additional configuration values from nix
+	clusterDomain, masterAddress := getKubernetesConfigValues(hostName)
+	
+	// Build DNS names list (same as apiserver)
+	dnsNames := []string{
+		hostName,
+		"kubernetes",
+		"kubernetes.default",
+		"kubernetes.default.svc",
+	}
+	
+	// Add cluster domain based SANs
+	if clusterDomain != "" {
+		dnsNames = append(dnsNames, "kubernetes.default.svc."+clusterDomain)
+	}
+	
+	// Build IP addresses list
+	ipAddresses := []string{hostIP, "10.0.0.1"}
+	
+	// Add masterAddress - it could be either IP or domain
+	if masterAddress != "" {
+		if net.ParseIP(masterAddress) != nil {
+			// It's an IP address
+			ipAddresses = append(ipAddresses, masterAddress)
+		} else {
+			// It's a domain name
+			dnsNames = append(dnsNames, masterAddress)
+		}
+	}
+	
+	return &CertConfig{
+		CommonName:   "kube-controller-manager",
+		DNSNames:     dnsNames,
+		IPAddresses:  ipAddresses,
+		ValidityDays: CertValidityDays,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+}
+
 func NewControllerManagerClientConfig() *CertConfig {
 	return &CertConfig{
 		CommonName:   "system:kube-controller-manager",

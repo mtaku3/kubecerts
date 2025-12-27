@@ -59,6 +59,7 @@ func (cm *CertManager) RenewExpiredCertificates() error {
 			certificates = append(certificates,
 				"apiserver.crt",
 				"kubelet.crt",
+				"controller-manager.crt",
 				"apiserver-kubelet-client.crt", 
 				"apiserver-etcd-client.crt",
 				"front-proxy-client.crt",
@@ -279,6 +280,8 @@ func (cm *CertManager) renewCertificate(h host.Host, certFile string) error {
 		return cm.regenerateAPIServerCert(h)
 	case "kubelet.crt":
 		return cm.regenerateKubeletServerCert(h)
+	case "controller-manager.crt":
+		return cm.regenerateControllerManagerServerCert(h)
 	case "apiserver-kubelet-client.crt":
 		return cm.regenerateAPIServerKubeletClientCert(h)
 	case "apiserver-etcd-client.crt":
@@ -477,6 +480,44 @@ func (cm *CertManager) regenerateKubeletServerCert(h host.Host) error {
 	}
 
 	logrus.Debugf("Successfully regenerated kubelet server certificate for %s", h.Name)
+	return nil
+}
+
+func (cm *CertManager) regenerateControllerManagerServerCert(h host.Host) error {
+	// Load CA
+	caCertPEM, err := cm.storage.LoadCertificate(h, "ca.crt")
+	if err != nil {
+		return fmt.Errorf("failed to load CA certificate: %w", err)
+	}
+	caKeyPEM, err := cm.storage.LoadPrivateKey(h, "ca.key")
+	if err != nil {
+		return fmt.Errorf("failed to load CA key: %w", err)
+	}
+
+	caCert, err := cert.ParseCertificateFromPEM(caCertPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA certificate: %w", err)
+	}
+	caKey, err := cert.ParsePrivateKeyFromPEM(caKeyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA key: %w", err)
+	}
+
+	// Generate new controller-manager server certificate
+	newCert, err := cert.GenerateCertificate(cert.NewControllerManagerServerConfig(h.Name, h.AdvertiseIP), caCert, caKey)
+	if err != nil {
+		return fmt.Errorf("failed to generate new controller-manager server certificate: %w", err)
+	}
+
+	// Save new certificate
+	if err := cm.storage.SaveCertificate(h, "controller-manager.crt", newCert.CertPEM); err != nil {
+		return fmt.Errorf("failed to save new controller-manager server certificate: %w", err)
+	}
+	if err := cm.storage.SavePrivateKey(h, "controller-manager.key", newCert.KeyPEM); err != nil {
+		return fmt.Errorf("failed to save new controller-manager server key: %w", err)
+	}
+
+	logrus.Debugf("Successfully regenerated controller-manager server certificate for %s", h.Name)
 	return nil
 }
 
