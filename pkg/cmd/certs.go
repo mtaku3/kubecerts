@@ -425,6 +425,12 @@ func (cm *CertManager) GenerateAPIServerCertificates() error {
 			return fmt.Errorf("failed to generate controller-manager server certificate: %w", err)
 		}
 
+		// Generate scheduler server certificate
+		schedulerCert, err := cert.GenerateCertificate(cert.NewSchedulerServerConfig(h.Name, h.AdvertiseIP), caCert, caKey)
+		if err != nil {
+			return fmt.Errorf("failed to generate scheduler server certificate: %w", err)
+		}
+
 		// Save certificates
 		if err := cm.storage.SaveCertificate(h, "apiserver.crt", apiServerCert.CertPEM); err != nil {
 			return fmt.Errorf("failed to save API server certificate: %w", err)
@@ -461,6 +467,12 @@ func (cm *CertManager) GenerateAPIServerCertificates() error {
 		}
 		if err := cm.storage.SavePrivateKey(h, "controller-manager.key", controllerManagerCert.KeyPEM); err != nil {
 			return fmt.Errorf("failed to save controller-manager key: %w", err)
+		}
+		if err := cm.storage.SaveCertificate(h, "scheduler.crt", schedulerCert.CertPEM); err != nil {
+			return fmt.Errorf("failed to save scheduler certificate: %w", err)
+		}
+		if err := cm.storage.SavePrivateKey(h, "scheduler.key", schedulerCert.KeyPEM); err != nil {
+			return fmt.Errorf("failed to save scheduler key: %w", err)
 		}
 
 		logrus.Infof("Generated API server certificates for host %s", h.Name)

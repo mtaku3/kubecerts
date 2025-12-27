@@ -72,6 +72,8 @@ func NewAPIServerConfig(hostName, hostIP string) *CertConfig {
 	// Build DNS names list
 	dnsNames := []string{
 		hostName,
+		"kubernetes",
+		"kubernetes.default",
 		"kubernetes.default.svc",
 	}
 	
@@ -287,6 +289,49 @@ func NewControllerManagerServerConfig(hostName, hostIP string) *CertConfig {
 	
 	return &CertConfig{
 		CommonName:   "kube-controller-manager",
+		DNSNames:     dnsNames,
+		IPAddresses:  ipAddresses,
+		ValidityDays: CertValidityDays,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+}
+
+// NewSchedulerServerConfig creates configuration for scheduler server certificate
+// Uses same SANs as apiserver but with CN=kube-scheduler
+func NewSchedulerServerConfig(hostName, hostIP string) *CertConfig {
+	// Get additional configuration values from nix
+	clusterDomain, masterAddress := getKubernetesConfigValues(hostName)
+	
+	// Build DNS names list (same as apiserver)
+	dnsNames := []string{
+		hostName,
+		"kubernetes",
+		"kubernetes.default",
+		"kubernetes.default.svc",
+	}
+	
+	// Add cluster domain based SANs
+	if clusterDomain != "" {
+		dnsNames = append(dnsNames, "kubernetes.default.svc."+clusterDomain)
+	}
+	
+	// Build IP addresses list
+	ipAddresses := []string{hostIP}
+	
+	// Add masterAddress - it could be either IP or domain
+	if masterAddress != "" {
+		if net.ParseIP(masterAddress) != nil {
+			// It's an IP address
+			ipAddresses = append(ipAddresses, masterAddress)
+		} else {
+			// It's a domain name
+			dnsNames = append(dnsNames, masterAddress)
+		}
+	}
+	
+	return &CertConfig{
+		CommonName:   "kube-scheduler",
 		DNSNames:     dnsNames,
 		IPAddresses:  ipAddresses,
 		ValidityDays: CertValidityDays,

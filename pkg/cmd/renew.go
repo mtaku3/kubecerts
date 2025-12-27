@@ -60,6 +60,7 @@ func (cm *CertManager) RenewExpiredCertificates() error {
 				"apiserver.crt",
 				"kubelet.crt",
 				"controller-manager.crt",
+				"scheduler.crt",
 				"apiserver-kubelet-client.crt", 
 				"apiserver-etcd-client.crt",
 				"front-proxy-client.crt",
@@ -282,6 +283,8 @@ func (cm *CertManager) renewCertificate(h host.Host, certFile string) error {
 		return cm.regenerateKubeletServerCert(h)
 	case "controller-manager.crt":
 		return cm.regenerateControllerManagerServerCert(h)
+	case "scheduler.crt":
+		return cm.regenerateSchedulerServerCert(h)
 	case "apiserver-kubelet-client.crt":
 		return cm.regenerateAPIServerKubeletClientCert(h)
 	case "apiserver-etcd-client.crt":
@@ -518,6 +521,44 @@ func (cm *CertManager) regenerateControllerManagerServerCert(h host.Host) error 
 	}
 
 	logrus.Debugf("Successfully regenerated controller-manager server certificate for %s", h.Name)
+	return nil
+}
+
+func (cm *CertManager) regenerateSchedulerServerCert(h host.Host) error {
+	// Load CA
+	caCertPEM, err := cm.storage.LoadCertificate(h, "ca.crt")
+	if err != nil {
+		return fmt.Errorf("failed to load CA certificate: %w", err)
+	}
+	caKeyPEM, err := cm.storage.LoadPrivateKey(h, "ca.key")
+	if err != nil {
+		return fmt.Errorf("failed to load CA key: %w", err)
+	}
+
+	caCert, err := cert.ParseCertificateFromPEM(caCertPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA certificate: %w", err)
+	}
+	caKey, err := cert.ParsePrivateKeyFromPEM(caKeyPEM)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA key: %w", err)
+	}
+
+	// Generate new scheduler server certificate
+	newCert, err := cert.GenerateCertificate(cert.NewSchedulerServerConfig(h.Name, h.AdvertiseIP), caCert, caKey)
+	if err != nil {
+		return fmt.Errorf("failed to generate new scheduler server certificate: %w", err)
+	}
+
+	// Save new certificate
+	if err := cm.storage.SaveCertificate(h, "scheduler.crt", newCert.CertPEM); err != nil {
+		return fmt.Errorf("failed to save new scheduler server certificate: %w", err)
+	}
+	if err := cm.storage.SavePrivateKey(h, "scheduler.key", newCert.KeyPEM); err != nil {
+		return fmt.Errorf("failed to save new scheduler server key: %w", err)
+	}
+
+	logrus.Debugf("Successfully regenerated scheduler server certificate for %s", h.Name)
 	return nil
 }
 

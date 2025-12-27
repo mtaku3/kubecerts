@@ -71,10 +71,12 @@ func getCertificatePriority(certFile string) int {
 		return 3
 	case certFile == "controller-manager.crt":
 		return 4
-	case certFile == "apiserver-kubelet-client.crt":
+	case certFile == "scheduler.crt":
 		return 5
-	case certFile == "apiserver-etcd-client.crt":
+	case certFile == "apiserver-kubelet-client.crt":
 		return 6
+	case certFile == "apiserver-etcd-client.crt":
+		return 7
 	case certFile == "front-proxy-client.crt":
 		return 5
 	// Etcd certificates (priority 3)
@@ -173,6 +175,7 @@ func (cm *CertManager) getCertificatesAndDiagnosticsForHost(h host.Host, now tim
 			"apiserver.crt",
 			"kubelet.crt",
 			"controller-manager.crt",
+			"scheduler.crt",
 			"apiserver-kubelet-client.crt",
 			"apiserver-etcd-client.crt", 
 			"front-proxy-client.crt",
@@ -501,6 +504,8 @@ func (cm *CertManager) getExpectedConfigForCert(h host.Host, certFile string) *c
 		return cert.NewKubeletServerConfig(h.Name, h.AdvertiseIP)
 	case "controller-manager.crt":
 		return cert.NewControllerManagerServerConfig(h.Name, h.AdvertiseIP)
+	case "scheduler.crt":
+		return cert.NewSchedulerServerConfig(h.Name, h.AdvertiseIP)
 	case "apiserver-kubelet-client.crt":
 		return cert.NewAPIServerKubeletClientConfig()
 	case "apiserver-etcd-client.crt":
@@ -537,7 +542,7 @@ func (cm *CertManager) getExpectedConfigForCert(h host.Host, certFile string) *c
 // getCAFileForCert returns the CA file for a given certificate
 func (cm *CertManager) getCAFileForCert(certFile string) string {
 	switch certFile {
-	case "apiserver.crt", "kubelet.crt", "controller-manager.crt", "apiserver-kubelet-client.crt", "kubelet-client.crt", "kube-proxy-client.crt", "controller-manager-client.crt", "scheduler-client.crt":
+	case "apiserver.crt", "kubelet.crt", "controller-manager.crt", "scheduler.crt", "apiserver-kubelet-client.crt", "kubelet-client.crt", "kube-proxy-client.crt", "controller-manager-client.crt", "scheduler-client.crt":
 		return "ca.crt"
 	case "apiserver-etcd-client.crt":
 		return "etcd/ca.crt"
